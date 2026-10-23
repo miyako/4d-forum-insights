@@ -1,0 +1,48 @@
+{
+  "title": "4D Forum Insights",
+  "forum_url": "https://discuss.4d.com",
+  "feature_request_category": 27,
+  "_preferred_runs": "Default run = first model here that has classifications (else the run with the most topics).",
+  "preferred_runs": ["ggml-org/Kev-4B-GGUF:Q8_0", "ggml-org/Kev-4B-GGUF:Q8_0:original"],
+  "hidden_runs": [],
+  "presets": [
+    {
+      "id": "hidden-fr",
+      "label": "Hidden feature requests",
+      "description": "Likely feature requests that were NOT posted in the Feature Request category",
+      "params": "a.fr=3,4&xcat=27&sort=a.fr"
+    },
+    {
+      "id": "gaps",
+      "label": "Missing capabilities",
+      "description": "Threads revealing a capability 4D lacks, outside the Feature Request category",
+      "params": "a.gap=yes&xcat=27&sort=a.gap"
+    },
+    {
+      "id": "fr-votes",
+      "label": "Top voted requests",
+      "description": "Feature Request category by votes",
+      "params": "cat=27&sort=votes"
+    },
+    {
+      "id": "bugs",
+      "label": "Bug reports",
+      "description": "Topics the model classifies as bug reports, newest first",
+      "params": "a.kind=bug_report&sort=new"
+    },
+    {
+      "id": "recent",
+      "label": "Latest activity",
+      "description": "All topics by last activity",
+      "params": "sort=active"
+    }
+  ],
+  "embeddings": {
+    "model": "Xenova/bge-small-en-v1.5",
+    "pooling": "cls",
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "doc_dtype": "fp32",
+    "query_dtype": "q8",
+    "quant": "int8"
+  }
+}

@@ -1,0 +1,54 @@
+# Deploy the static site to GitHub Pages.
+# The data (site/data) is not committed: it is published as the asset site-data.tar.gz on the "data"
+# release (by `make publish` or the delta workflow) and unpacked into the site at deploy time.
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', 'config/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch published data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p site/data
+          if gh release download data --repo "$GITHUB_REPOSITORY" --pattern site-data.tar.gz --dir /tmp; then
+            tar -xzf /tmp/site-data.tar.gz -C site
+            # the embedding text hashes are only a build cache, not used by the UI
+            rm -f site/data/embeddings-hashes.json
+            jq -r '"\(.stats.topics) topics, \(.runs | length) runs, embeddings: \(.embeddings.count // 0)"' site/data/manifest.json
+          else
+            echo "::warning::no site-data.tar.gz on the data release yet; deploying the site without data"
+          fi
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

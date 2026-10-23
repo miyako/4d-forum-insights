@@ -1,8 +1,10 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "forum.db"
+# vendored copy: the working DB location can be overridden (CI keeps it outside the package)
+DB_PATH = Path(os.environ.get("FMINER_DB") or Path(__file__).resolve().parents[2] / "data" / "forum.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS categories (
@@ -89,6 +91,9 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     for col, typ in (("kind", "TEXT"), ("kind_fr_p", "REAL"), ("answers", "TEXT")):
         if col not in cols:
             con.execute(f"ALTER TABLE classifications ADD COLUMN {col} {typ}")
+    # vendored copy: when the thread text last actually changed (drives re-enrichment of edited/bumped topics)
+    if "raw_changed_at" not in {r[1] for r in con.execute("PRAGMA table_info(topics)")}:
+        con.execute("ALTER TABLE topics ADD COLUMN raw_changed_at TEXT")
     return con
 
 

@@ -1,3 +1,22 @@
+# fminer — vendored copy
+
+This directory is a **copy** of the `fminer` package from the local `4d-feature-miner` repository
+(upstream commit `845ee37`), vendored so GitHub Actions can run the incremental (delta) pipeline.
+The original is never modified from here. Changes made in this copy (all marked `vendored copy` in the code):
+
+| File | Change |
+|------|--------|
+| `db.py` | `FMINER_DB` env var overrides the DB path; new `topics.raw_changed_at` column (migrated automatically) |
+| `scrape.py` | `store_raw()` only moves `raw_changed_at` when the thread text really changed |
+| `enrich.py`, `classify.py` | `--stale` (redo topics whose input changed) and `--budget-minutes` (time-boxed CI runs) |
+| `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
+| `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
+
+**Keep `classify.QUESTIONS` identical to upstream**: the prompt version stored with every classification is a
+hash of it, so any difference starts a new run instead of extending the existing one.
+
+---
+
 # 4d-feature-miner
 
 Find feature requests on [discuss.4d.com](https://discuss.4d.com) that were not posted in the

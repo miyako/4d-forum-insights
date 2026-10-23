@@ -11,3 +11,5 @@ __pycache__/
 *.py[oc]
 .venv/
 .DS_Store
+pipeline/logs/
+pipeline/data/

@@ -20,6 +20,8 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--limit", type=int)
     p.add_argument("--redo", action="store_true")
+    p.add_argument("--stale", action="store_true", help="also redo topics whose thread text changed since enrichment")
+    p.add_argument("--budget-minutes", type=float, help="stop starting new topics after this many minutes")
 
     p = sub.add_parser("classify", help="score topics with a decision model via /v1/systemone")
     p.add_argument("--base-url", default="http://127.0.0.1:8080")
@@ -28,6 +30,14 @@ def main() -> None:
     p.add_argument("--limit", type=int)
     p.add_argument("--sample", type=int, help="classify a random sample of N topics (half from the FR category)")
     p.add_argument("--original", action="store_true", help="use original-language text instead of the English translation")
+    p.add_argument("--stale", action="store_true", help="also redo topics re-enriched since they were classified")
+    p.add_argument("--budget-minutes", type=float, help="stop starting new topics after this many minutes")
+
+    p = sub.add_parser("delta", help="incremental update: new/bumped topics, raw text, edit sweep (no LLM)")
+    p.add_argument("--full-list", action="store_true", help="walk every category listing (refreshes votes/views)")
+    p.add_argument("--sweep-recent-days", type=int, default=45, help="re-check topics active in the last N days")
+    p.add_argument("--sweep-window", type=int, default=300, help="also re-check the N topics checked longest ago")
+    p.add_argument("--interval", type=float, default=1.0, help="min seconds between requests")
 
     p = sub.add_parser("calibrate", help="evaluate a model run against the feature-request category")
     p.add_argument("--model")
@@ -60,10 +70,16 @@ def main() -> None:
         scrape.fetch_raw(scrape.Client(min_interval=a.interval), con, workers=a.workers, limit=a.limit)
     elif a.cmd == "enrich":
         from . import enrich
-        enrich.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, redo=a.redo)
+        enrich.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, redo=a.redo, stale=a.stale,
+                   budget_minutes=a.budget_minutes)
     elif a.cmd == "classify":
         from . import classify
-        classify.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample, original=a.original)
+        classify.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample, original=a.original,
+                     stale=a.stale, budget_minutes=a.budget_minutes)
+    elif a.cmd == "delta":
+        from . import delta, scrape
+        delta.run(scrape.Client(min_interval=a.interval), con, full_list=a.full_list,
+                  sweep_recent_days=a.sweep_recent_days, sweep_window=a.sweep_window)
     elif a.cmd == "calibrate":
         from . import classify
         classify.calibrate(con, a.model)

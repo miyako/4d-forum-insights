@@ -90,14 +90,18 @@ class Decider:
         return r.json()
 
 
-def run(con, base_url, model, workers=4, limit=None, sample=None, original=False, log=print):
+def run(con, base_url, model, workers=4, limit=None, sample=None, original=False, stale=False,
+        budget_minutes=None, log=print):
     decider = Decider(base_url, model)
     model_id = decider.model_id() + (":original" if original else "")
     ready = "t.first_post_raw IS NOT NULL" if original else "t.enriched_at IS NOT NULL"
+    # vendored copy: --stale also redoes topics whose input changed after they were classified
+    newer = "t.raw_changed_at" if original else "t.enriched_at"
+    extra = f"AND c.created_at >= COALESCE({newer}, '')" if stale else ""
     rows = con.execute(
         f"""SELECT t.* FROM topics t
             WHERE {ready} AND NOT EXISTS (
-                SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model=? AND c.prompt_version=?)
+                SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model=? AND c.prompt_version=? {extra})
             ORDER BY t.id DESC""",
         (model_id, PROMPT_VERSION),
     ).fetchall()
@@ -110,8 +114,11 @@ def run(con, base_url, model, workers=4, limit=None, sample=None, original=False
         rows = rows[:limit]
     log(f"[classify] {len(rows)} topics with {model_id} ({PROMPT_VERSION})")
     started, done = time.monotonic(), 0
+    deadline = started + budget_minutes * 60 if budget_minutes else None
 
     def work(row):
+        if deadline and time.monotonic() > deadline:
+            return row, None, "budget"
         try:
             return row, decider.ask(build_state(row, original)), None
         except Exception as e:
@@ -120,6 +127,8 @@ def run(con, base_url, model, workers=4, limit=None, sample=None, original=False
     with ThreadPoolExecutor(workers) as pool:
         for fut in as_completed([pool.submit(work, r) for r in rows]):
             row, res, err = fut.result()
+            if err == "budget":
+                continue
             done += 1
             if err:
                 log(f"[classify] topic {row['id']}: {err}")
@@ -140,6 +149,8 @@ def run(con, base_url, model, workers=4, limit=None, sample=None, original=False
                 rate = done / (time.monotonic() - started)
                 log(f"[classify] {done}/{len(rows)}  {rate:.1f}/s")
     con.commit()
+    if done < len(rows):
+        log(f"[classify] time budget reached: {len(rows) - done} topics left for the next run")
 
 
 def _auc(pos, neg):

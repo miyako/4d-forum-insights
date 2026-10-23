@@ -1,0 +1,24 @@
+{
+  "_comment": "Display metadata for the model questions. Everything here is optional: a question found in the data but missing here is still published (type, levels and choices come from the model answers, the description from the vendored fminer.classify.QUESTIONS). 'order' sorts filters/columns; 'primary' marks the score used by presets and the default sort.",
+  "fr": {
+    "label": "Feature request",
+    "short": "FR",
+    "order": 1,
+    "primary": true,
+    "levels": {"0": "Most unlikely", "1": "Unlikely", "2": "Neutral", "3": "Likely", "4": "Most likely"}
+  },
+  "kind": {
+    "label": "Post kind",
+    "short": "Kind",
+    "order": 2,
+    "choices": {
+      "feature_request": "Feature request",
+      "bug_report": "Bug report",
+      "question": "Question",
+      "announcement": "Announcement",
+      "discussion": "Discussion"
+    }
+  },
+  "request": {"label": "Asks 4D for a change", "short": "Asks", "order": 3},
+  "gap": {"label": "Reveals a missing capability", "short": "Gap", "order": 4}
+}

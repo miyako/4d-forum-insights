@@ -185,6 +185,23 @@ def fetch_thread(client, topic_id, posts_count):
     return "\n\n-------------------------\n\n".join(parts)
 
 
+def store_raw(con, topic_id, bumped_at, raw):
+    """Save a fetched thread. Returns True if the text differs from what was stored."""
+    posts = split_raw(raw)
+    first = posts[0] if posts else None
+    stamp = now()
+    # vendored copy: raw_changed_at only moves when the text really changed (SET sees the old row values)
+    cur = con.execute(
+        """UPDATE topics SET raw_changed_at = CASE WHEN thread_raw IS ? THEN raw_changed_at ELSE ? END,
+               thread_raw=?, first_post_raw=?, op_username=?, raw_bumped_at=?, raw_fetched_at=?, fetch_error=NULL
+           WHERE id=? RETURNING raw_changed_at""",
+        (raw, stamp, raw, first["text"] if first else raw, first["user"] if first else None,
+         bumped_at, stamp, topic_id),
+    )
+    row = cur.fetchone()
+    return bool(row and row[0] == stamp)
+
+
 def fetch_raw(client, con, workers=2, limit=None, log=print):
     rows = con.execute(
         """SELECT id, posts_count, bumped_at FROM topics
@@ -216,14 +233,7 @@ def fetch_raw(client, con, workers=2, limit=None, log=print):
                 if err:
                     con.execute("UPDATE topics SET fetch_error=? WHERE id=?", (err, row["id"]))
                 else:
-                    posts = split_raw(raw)
-                    first = posts[0] if posts else None
-                    con.execute(
-                        """UPDATE topics SET thread_raw=?, first_post_raw=?, op_username=?,
-                               raw_bumped_at=?, raw_fetched_at=?, fetch_error=NULL WHERE id=?""",
-                        (raw, first["text"] if first else raw, first["user"] if first else None,
-                         row["bumped_at"], now(), row["id"]),
-                    )
+                    store_raw(con, row["id"], row["bumped_at"], raw)
                 con.commit()
                 done += 1
                 if done % 25 == 0 or done == len(rows):

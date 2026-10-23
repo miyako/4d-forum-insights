@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>4D Forum Insights</title>
+  <meta name="description" content="Search and browse a model-annotated index of every topic on the 4D forum (discuss.4d.com).">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='Arial' font-weight='700' font-size='15' fill='white' text-anchor='middle'%3E4D%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="modulepreload" href="js/app.js">
+  <link rel="preload" href="data/manifest.json" as="fetch" crossorigin>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" title="Reset">
+      <span class="logo">4D</span><span class="brand-text">Forum Insights</span>
+    </a>
+    <form class="search" id="search-form" role="search" autocomplete="off">
+      <input id="q" type="search" placeholder="Search topics…  ( / )" aria-label="Search topics" spellcheck="false">
+      <div class="modes" role="radiogroup" aria-label="Search mode">
+        <button type="button" data-mode="kw" role="radio" title="Keyword search (titles, summaries, tags)">Keyword</button>
+        <button type="button" data-mode="hyb" role="radio" title="Keyword + semantic, fused ranking">Hybrid</button>
+        <button type="button" data-mode="sem" role="radio" title="Semantic search (meaning, not words)">Semantic</button>
+      </div>
+    </form>
+    <label class="run-select" title="Which model run's answers are used for filters, sorting and chips">
+      <span>Model run</span>
+      <select id="run"></select>
+    </label>
+  </header>
+
+  <nav class="presets" id="presets" aria-label="Preset views"></nav>
+
+  <div class="layout">
+    <aside class="filters" id="filters" aria-label="Filters">
+      <div class="filters-head">
+        <strong>Filters</strong>
+        <button type="button" class="link" id="clear-filters">Clear all</button>
+        <button type="button" class="link only-mobile" id="close-filters">Done</button>
+      </div>
+      <div id="filter-body"></div>
+    </aside>
+
+    <main class="results" id="results-pane">
+      <div class="toolbar">
+        <button type="button" class="only-mobile btn" id="open-filters">Filters</button>
+        <div class="count" id="count" aria-live="polite">Loading…</div>
+        <div class="toolbar-right">
+          <label>Sort <select id="sort"></select></label>
+          <div class="views" role="radiogroup" aria-label="View">
+            <button type="button" data-view="list" title="Cards">☰</button>
+            <button type="button" data-view="table" title="Table">▦</button>
+          </div>
+        </div>
+      </div>
+      <div class="status" id="status" hidden></div>
+      <div class="chips-active" id="active-filters"></div>
+      <div id="results"></div>
+      <div class="more" id="more"></div>
+    </main>
+
+    <section class="detail" id="detail" hidden aria-label="Topic detail">
+      <div class="detail-inner" id="detail-body"></div>
+    </section>
+  </div>
+
+  <footer class="footer" id="footer"></footer>
+
+  <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

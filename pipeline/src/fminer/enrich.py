@@ -183,13 +183,17 @@ def enrich_one(llm, row):
     }
 
 
-def run(con, base_url, model, workers=4, limit=None, redo=False, log=print):
+def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, budget_minutes=None, log=print):
     llm = LLM(base_url, model)
     model_id = llm.model_id()
+    # vendored copy: --stale also re-enriches topics whose thread text changed after enrichment
+    todo = "" if redo else (
+        "AND (t.enriched_at IS NULL OR t.enriched_at < COALESCE(t.raw_changed_at, ''))" if stale
+        else "AND t.enriched_at IS NULL")
     rows = con.execute(
         f"""SELECT t.id, t.title, t.first_post_raw, t.thread_raw, c.slug AS category_slug
             FROM topics t LEFT JOIN categories c ON c.id=t.category_id
-            WHERE t.first_post_raw IS NOT NULL {'' if redo else 'AND t.enriched_at IS NULL'}
+            WHERE t.first_post_raw IS NOT NULL {todo}
             ORDER BY (t.category_id = ?) DESC, t.id DESC""",
         (db.FEATURE_REQUEST_CATEGORY,),
     ).fetchall()
@@ -197,8 +201,11 @@ def run(con, base_url, model, workers=4, limit=None, redo=False, log=print):
         rows = rows[:limit]
     log(f"[enrich] {len(rows)} topics with {model_id}")
     started, done = time.monotonic(), 0
+    deadline = started + budget_minutes * 60 if budget_minutes else None
 
     def work(row):
+        if deadline and time.monotonic() > deadline:
+            return row, None, "budget"
         try:
             return row, enrich_one(llm, row), None
         except Exception as e:
@@ -207,6 +214,8 @@ def run(con, base_url, model, workers=4, limit=None, redo=False, log=print):
     with ThreadPoolExecutor(workers) as pool:
         for fut in as_completed([pool.submit(work, r) for r in rows]):
             row, out, err = fut.result()
+            if err == "budget":
+                continue
             if err:
                 con.execute("UPDATE topics SET enrich_error=? WHERE id=?", (err, row["id"]))
             else:
@@ -222,4 +231,6 @@ def run(con, base_url, model, workers=4, limit=None, redo=False, log=print):
                 rate = done / (time.monotonic() - started)
                 log(f"[enrich] {done}/{len(rows)}  {rate*60:.1f}/min  eta {(len(rows)-done)/rate/3600:.1f} h"
                     + (f"  last error: {err}" if err else ""))
+    if done < len(rows):
+        log(f"[enrich] time budget reached: {len(rows) - done} topics left for the next run")
     db.rebuild_fts(con)
