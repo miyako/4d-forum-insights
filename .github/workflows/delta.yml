@@ -1,0 +1,178 @@
+# Weekly incremental update:
+#   pull encrypted DB → fetch delta from discuss.4d.com → enrich (gemma-4-E4B) → classify (Kev-4B)
+#   → export site data → embed new/changed topics → push DB + site data → deploy Pages
+#
+# Models run on the CPU of a standard ubuntu-latest runner (4 vCPU / 16 GB for public repos) with a
+# prebuilt llama.cpp release. Both model steps are time-boxed and resumable, so a large backlog is
+# simply spread over several runs. See README.md "Delta updates" for the evaluation and the local
+# fallback (`make db-pull delta-local db-push`).
+#
+# Requires the repository secret DB_KEY and a seeded DB asset (`make db-seed`, once).
+name: Delta update
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'   # Mondays 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      skip_models:
+        description: 'Only fetch the delta (no enrich / classify)'
+        type: boolean
+        default: false
+      full_list:
+        description: 'Re-list every topic (refreshes votes / views / likes; ~10 min of polite requests)'
+        type: boolean
+        default: false
+      sweep_window:
+        description: 'Older topics re-checked for edits per run (rolling window)'
+        default: '300'
+      enrich_budget:
+        description: 'Minutes for the enrich step'
+        default: '180'
+      classify_budget:
+        description: 'Minutes for the classify step'
+        default: '90'
+      llama_tag:
+        description: 'llama.cpp release tag (default: newest bNNNN build)'
+        default: ''
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: delta
+  cancel-in-progress: false
+
+jobs:
+  delta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DB_KEY: ${{ secrets.DB_KEY }}
+      WORK_DB: ${{ github.workspace }}/build/work.db
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check prerequisites
+        id: pre
+        run: |
+          if [ -z "$DB_KEY" ]; then
+            echo "::warning::secret DB_KEY is not set; see README.md (Delta updates). Nothing to do."; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! gh release view data --json assets --jq '.assets[].name' 2>/dev/null | grep -qx forum.db.zst.enc; then
+            echo "::warning::no forum.db.zst.enc on the data release; seed it once with 'make db-seed'. Nothing to do."; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space (the two Q8 models need ~12 GB)
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: astral-sh/setup-uv@v10
+        if: steps.pre.outputs.ok == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.pre.outputs.ok == 'true'
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install tools
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 zstd jq >/dev/null
+          (cd pipeline && uv sync -q)
+          npm ci --no-audit --no-fund
+
+      - name: Pull working DB
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          scripts/db-store.sh pull "$WORK_DB"
+          sqlite3 "$WORK_DB" "SELECT COUNT(*) AS topics, COUNT(enriched_at) AS enriched FROM topics;"
+
+      - name: Install llama.cpp (prebuilt, CPU)
+        if: steps.pre.outputs.ok == 'true' && inputs.skip_models != true
+        run: |
+          tag="${{ inputs.llama_tag }}"
+          [ -n "$tag" ] || tag=$(gh release list -R ggml-org/llama.cpp --limit 30 --json tagName \
+                                  --jq '[.[].tagName | select(test("^b[0-9]+$"))][0]')
+          echo "llama.cpp $tag"
+          gh release download "$tag" -R ggml-org/llama.cpp --pattern "llama-$tag-bin-ubuntu-x64.tar.gz" --dir /tmp
+          mkdir -p /opt/llama && tar -xzf "/tmp/llama-$tag-bin-ubuntu-x64.tar.gz" -C /opt/llama --strip-components=1
+          /opt/llama/llama-server --version
+          echo "LLAMA_SERVER=/opt/llama/llama-server" >> "$GITHUB_ENV"
+
+      - name: Fetch delta, enrich, classify
+        if: steps.pre.outputs.ok == 'true'
+        env:
+          FMINER_DB: ${{ github.workspace }}/build/work.db
+          SKIP_MODELS: ${{ inputs.skip_models == true && '1' || '' }}
+          SWEEP_WINDOW: ${{ inputs.sweep_window || '300' }}
+          ENRICH_BUDGET: ${{ inputs.enrich_budget || '180' }}
+          CLASSIFY_BUDGET: ${{ inputs.classify_budget || '90' }}
+          FREE_MODEL_CACHE: '1'
+          WORKERS: '2'
+        run: |
+          # on the schedule, re-list every topic in the first week of each month
+          if [ "${{ inputs.full_list }}" = true ] || { [ "${{ github.event_name }}" = schedule ] && [ "$(date -u +%d)" -le 7 ]; }; then
+            export FULL_LIST=1
+          fi
+          pipeline/ci/run-delta.sh
+
+      - name: Save working DB
+        if: always() && steps.pre.outputs.ok == 'true'
+        run: scripts/db-store.sh push "$WORK_DB"
+
+      - name: Previous site data (embedding cache)
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          mkdir -p site/data
+          gh release download data --pattern site-data.tar.gz --dir /tmp && tar -xzf /tmp/site-data.tar.gz -C site || true
+
+      - uses: actions/cache@v6
+        if: steps.pre.outputs.ok == 'true'
+        with:
+          path: build/hf-cache
+          key: hf-${{ hashFiles('config/site.json') }}
+
+      - name: Export site data and embeddings
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          make snapshot data FMINER_DB_SRC="$WORK_DB"
+          EMBED_THREADS=4 make embeddings
+
+      - name: Publish site data
+        id: publish
+        if: steps.pre.outputs.ok == 'true'
+        run: |
+          make site-data
+          gh release upload data build/site-data.tar.gz --clobber
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always() && steps.pre.outputs.ok == 'true'
+        run: |
+          {
+            echo "### Delta update"
+            echo '```'
+            sqlite3 "$WORK_DB" "SELECT key, value FROM state WHERE key LIKE 'last_%';" || true
+            sqlite3 "$WORK_DB" "SELECT 'topics', COUNT(*), 'enriched', COUNT(enriched_at) FROM topics;" || true
+            sqlite3 "$WORK_DB" "SELECT model, COUNT(*) FROM classifications GROUP BY model;" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pages:
+    needs: delta
+    if: needs.delta.outputs.published == 'true'
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

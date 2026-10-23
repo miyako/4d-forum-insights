@@ -1,0 +1,15 @@
+{
+  "name": "4d-forum-insights",
+  "private": true,
+  "type": "module",
+  "description": "Static site + build scripts for the model-annotated index of discuss.4d.com",
+  "scripts": {
+    "embeddings": "node scripts/build_embeddings.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "minisearch": "7.2.0"
+  }
+}

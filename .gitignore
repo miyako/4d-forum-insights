@@ -1,0 +1,15 @@
+# local working data (never commit the forum DB or generated site data)
+build/
+work/
+site/data/
+*.db
+*.db-*
+*.zst
+*.enc
+node_modules/
+__pycache__/
+*.py[oc]
+.venv/
+.DS_Store
+pipeline/logs/
+pipeline/data/
