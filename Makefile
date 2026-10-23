@@ -56,7 +56,7 @@ serve:
 ## site/data -> build/site-data.tar.gz
 site-data:
 	@test -f site/data/manifest.json || { echo "site/data is empty: run make data first"; exit 1; }
-	tar -czf build/site-data.tar.gz -C site data
+	COPYFILE_DISABLE=1 tar -czf build/site-data.tar.gz -C site data
 	@du -h build/site-data.tar.gz
 
 ## upload site-data.tar.gz to the "data" release and redeploy Pages
