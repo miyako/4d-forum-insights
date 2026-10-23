@@ -27,6 +27,7 @@ Main features:
   - a link to the original thread
 - **Shareable URLs**: the whole search state (query, mode, filters, sort, run, view, open topic) is kept in the query string.
 - **Card and table views**, and a mobile layout.
+- **Light, dark or Auto theme**. Auto follows the OS and is the default. The choice is kept in localStorage and applied before first paint, so the page never flashes the wrong theme.
 
 Only titles, machine-translated titles, model-written summaries, metadata, model answers and links are published.
 Forum post and thread text is never published.

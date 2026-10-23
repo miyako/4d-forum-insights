@@ -4,13 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>4D Forum Insights</title>
+  <meta name="color-scheme" content="light dark">
   <meta name="description" content="Search and browse a model-annotated index of every topic on the 4D forum (discuss.4d.com).">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='Arial' font-weight='700' font-size='15' fill='white' text-anchor='middle'%3E4D%3C/text%3E%3C/svg%3E">
+  <script>/* theme before first paint: auto (no attribute) follows the OS; see js/theme.js */
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.setAttribute('data-theme', t);
+        document.querySelector('meta[name=color-scheme]').content = t;
+      }
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="css/style.css">
   <link rel="modulepreload" href="js/app.js">
+  <script type="module" src="js/theme.js"></script>
   <link rel="preload" href="data/manifest.json" as="fetch" crossorigin>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-light" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></symbol>
+    <symbol id="i-dark" viewBox="0 0 24 24"><path fill="currentColor" d="M20.2 14.6A8.5 8.5 0 0 1 9.4 3.8a8.5 8.5 0 1 0 10.8 10.8z"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></symbol>
+  </svg>
   <header class="topbar">
     <a class="brand" href="./" title="Reset">
       <span class="logo">4D</span><span class="brand-text">Forum Insights</span>
@@ -27,6 +43,17 @@
       <span>Model run</span>
       <select id="run"></select>
     </label>
+    <div class="theme-menu" id="theme-menu">
+      <button type="button" class="icon theme-btn" id="theme-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-list"
+              aria-label="Color theme: Auto (follows system)" title="Color theme: Auto (follows system)">
+        <svg class="ico" aria-hidden="true"><use href="#i-auto"></use></svg>
+      </button>
+      <ul class="theme-list" id="theme-list" role="menu" aria-label="Color theme" hidden>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="auto" aria-checked="true"><svg class="ico" aria-hidden="true"><use href="#i-auto"></use></svg>Auto <span class="muted">(system)</span></li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="light" aria-checked="false"><svg class="ico" aria-hidden="true"><use href="#i-light"></use></svg>Light</li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="dark" aria-checked="false"><svg class="ico" aria-hidden="true"><use href="#i-dark"></use></svg>Dark</li>
+      </ul>
+    </div>
   </header>
 
   <nav class="presets" id="presets" aria-label="Preset views"></nav>
