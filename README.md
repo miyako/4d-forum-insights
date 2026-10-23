@@ -129,8 +129,8 @@ URL parameters for answers are `a.<question>=<levels or choices>`, for example `
      - Comparing the raw text costs the same one request as reading `/t/{id}.json` post `version`s, and it is exact.
      - Only a real change moves the new `raw_changed_at` column, which marks the topic for re-enrichment.
    - In the first week of each month it also re-lists every topic (`--full-list`) to refresh votes, views and likes.
-3. **Enrich** new and changed topics with gemma-4-E4B, then **classify** them with Kev-4B (`--stale` redoes topics whose input changed).
-   - Both steps are time-boxed (`--budget-minutes`, 180 + 90 by default) and resumable, so a backlog spreads over several runs.
+3. **Enrich** new and changed topics with gemma-4-E4B, **backfill** missing or short summaries with the same model (`fminer enrich --resummarise-empty`, which also drops those topics' classifications), then **classify** with Kev-4B (`--stale` redoes topics whose input or summary changed).
+   - All model steps are time-boxed (`--budget-minutes`, 180 + 90 by default; enrich and the backfill share the 180) and resumable, so a backlog spreads over several runs.
 4. **Save** the DB. This runs even if a later step fails, so progress is never lost.
 5. **Export** with `make data`, **embed** only the new or changed topics (the previous `site-data.tar.gz` is the cache), upload `site-data.tar.gz`, and **deploy** Pages.
 
@@ -172,7 +172,7 @@ If CPU runs are too slow, or there is a backlog, run the same delta locally and 
 ```sh
 export DB_KEY=...                                  # same passphrase as the secret
 make db-pull                                       # → build/work.db
-LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + classify
+LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + summary backfill + classify
 make db-push                                       # save the DB for the next Actions run
 make snapshot data embeddings FMINER_DB_SRC=build/work.db && make publish
 ```
@@ -181,6 +181,6 @@ The local llama-servers listen on ports 18081 and 18080, so they never collide w
 
 ## Notes on the data
 
-- About 57% of the topics enriched so far have an **empty `summary_paragraph`**; only the one-line summary is filled. The site falls back to the summary line. This looks like an issue in the enrich step's output parsing that is worth fixing upstream.
+- In the first enrich pass about 57% of the topics got an **empty `summary_paragraph`** (only the one-line summary was filled). Upstream fixed this in `8381102` (schema minimum lengths, retries and a `--resummarise-empty` backfill), and the vendored pipeline has the same fix. The site still falls back to the summary line for any topic left without a paragraph.
 - Score levels are bucketed to the nearest level, which is equivalent to the classifier's 0.5, 1.5, 2.5 and 3.5 thresholds. The "Most likely" bucket is therefore rare: it needs an expected score of at least 3.5.
 - Languages come from the enrich step. For topics that are not yet enriched they are guessed from the text and shown as "(guessed)" in the detail panel.

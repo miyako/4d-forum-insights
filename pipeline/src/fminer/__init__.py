@@ -22,6 +22,8 @@ def main() -> None:
     p.add_argument("--redo", action="store_true")
     p.add_argument("--stale", action="store_true", help="also redo topics whose thread text changed since enrichment")
     p.add_argument("--budget-minutes", type=float, help="stop starting new topics after this many minutes")
+    p.add_argument("--resummarise-empty", action="store_true",
+                   help="only regenerate missing/short summaries from stored English text (no re-translation)")
 
     p = sub.add_parser("classify", help="score topics with a decision model via /v1/systemone")
     p.add_argument("--base-url", default="http://127.0.0.1:8080")
@@ -71,7 +73,7 @@ def main() -> None:
     elif a.cmd == "enrich":
         from . import enrich
         enrich.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, redo=a.redo, stale=a.stale,
-                   budget_minutes=a.budget_minutes)
+                   budget_minutes=a.budget_minutes, resummarise_empty=a.resummarise_empty)
     elif a.cmd == "classify":
         from . import classify
         classify.run(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample, original=a.original,

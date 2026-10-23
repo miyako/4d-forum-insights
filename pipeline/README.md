@@ -1,7 +1,7 @@
 # fminer — vendored copy
 
 This directory is a **copy** of the `fminer` package from the local `4d-feature-miner` repository
-(upstream commit `845ee37`), vendored so GitHub Actions can run the incremental (delta) pipeline.
+(upstream commit `845ee37`, plus the empty-summary fix from `8381102` ported by hand), vendored so GitHub Actions can run the incremental (delta) pipeline.
 The original is never modified from here. Changes made in this copy (all marked `vendored copy` in the code):
 
 | File | Change |
@@ -9,6 +9,7 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `db.py` | `FMINER_DB` env var overrides the DB path; new `topics.raw_changed_at` column (migrated automatically) |
 | `scrape.py` | `store_raw()` only moves `raw_changed_at` when the thread text really changed |
 | `enrich.py`, `classify.py` | `--stale` (redo topics whose input changed) and `--budget-minutes` (time-boxed CI runs) |
+| `enrich.py` (port of upstream `8381102`) | summary schema `minLength`/`maxLength` (line 30–400, paragraph 80–1500 chars); `summarise()` retries up to 4 times with temperature +0.25 per attempt on JSON errors or short fields and keeps the longest result; `--resummarise-empty` backfills missing/short summaries from the stored English text; rewriting a summary deletes the topic's non-`:original` classifications so `classify` redoes them. Unlike upstream, the backfill also honours `--budget-minutes` |
 | `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
 | `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
 
