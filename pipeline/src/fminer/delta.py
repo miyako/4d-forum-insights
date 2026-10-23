@@ -66,7 +66,8 @@ def sweep(client, con, recent_days=45, window=300, since=None, log=print):
         try:
             raw = scrape.fetch_thread(client, r["id"], posts_count)
         except Exception as e:  # deleted/private topics etc.: record and keep going
-            con.execute("UPDATE topics SET fetch_error=? WHERE id=?", (repr(e), r["id"]))
+            # also stamp the attempt so dead topics rotate to the back of the rolling window
+            con.execute("UPDATE topics SET fetch_error=?, raw_fetched_at=? WHERE id=?", (repr(e), now(), r["id"]))
             con.commit()
             continue
         if scrape.store_raw(con, r["id"], r["bumped_at"], raw):
