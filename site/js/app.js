@@ -362,6 +362,18 @@ const LEVEL_CLASSES = (q, key) => {
   const i = q.levels.findIndex((l) => l.key === key);
   return `lv lv-${Math.round((4 * i) / Math.max(1, q.levels.length - 1))}`;
 };
+// bands are listed high → low
+const BAND_CLASSES = (q, key) => {
+  const i = q.bands.findIndex((b) => b.key === key);
+  return `lv lv-${4 - Math.round((4 * i) / Math.max(1, q.bands.length - 1))}`;
+};
+const bandOfAnswer = (q, a) => (q.bands && a?.b ? q.bands.find((b) => b.key === a.b) : null);
+const scoreClass = (q, a) => (bandOfAnswer(q, a) ? BAND_CLASSES(q, a.b) : LEVEL_CLASSES(q, a.lv));
+const scoreTitle = (q, a) => {
+  const l = q.levels.find((x) => x.key === a.lv);
+  const b = bandOfAnswer(q, a);
+  return `${q.label}: ${b ? `${b.label} band (${b.long}); ` : ''}score ${a.s.toFixed(2)}, nearest level "${l?.long || a.lv}"`;
+};
 
 function optRow(facet, value, label, count, checked, type = 'checkbox', extra = '') {
   return `<label class="opt${count ? '' : ' zero'}"><input type="${type}" name="${esc(facet)}" value="${esc(value)}" ${checked ? 'checked' : ''}>`
@@ -376,7 +388,13 @@ function renderFacets(base, preds) {
     const box = $(`[data-facet="a.${CSS.escape(q.id)}"]`);
     if (!box) continue;
     const sel = s.ans[q.id];
-    if (q.type === 'score') {
+    if (q.type === 'score' && q.bands?.length && app.run?.bands?.[q.id]) {
+      const c = facetCounts(base, preds, 'a.' + q.id, (t) => t.ans?.[q.id]?.b);
+      const cuts = app.run.bands[q.id].cuts;
+      box.innerHTML = q.bands.map((b, i) => optRow('a.' + q.id, b.key, esc(b.label), c.get(b.key) || 0,
+        sel?.includes(b.key), 'checkbox', `<i class="${BAND_CLASSES(q, b.key)}" title="${esc(b.long)}"></i>`)
+        .replace('<span class="opt-label">', `<span class="opt-label" title="${esc(b.long)}${cuts[i] != null ? ` (score ≥ ${cuts[i].toFixed(2)})` : ''}">`)).join('');
+    } else if (q.type === 'score') {
       const c = facetCounts(base, preds, 'a.' + q.id, (t) => t.ans?.[q.id]?.lv);
       box.innerHTML = [...q.levels].reverse().map((l) => optRow('a.' + q.id, l.key, esc(l.label), c.get(l.key) || 0,
         sel?.includes(l.key), 'checkbox', `<i class="${LEVEL_CLASSES(q, l.key)}"></i>`)).join('');
@@ -434,7 +452,7 @@ function renderActive() {
   for (const q of app.questions) {
     const v = s.ans[q.id];
     if (!v || (Array.isArray(v) && !v.length)) continue;
-    const label = q.type === 'score' ? v.map((k) => q.levels.find((l) => l.key === k)?.label || k).join(' / ')
+    const label = q.type === 'score' ? v.map((k) => q.bands?.find((b) => b.key === k)?.label || q.levels.find((l) => l.key === k)?.label || k).join(' / ')
       : q.type === 'choice' ? v.map((k) => q.choices.find((c) => c.key === k)?.label || k).join(' / ')
         : NOUL_FILTERS.find((f) => f.key === v)?.label || v;
     chip(`${q.short}: ${label}`, () => { delete s.ans[q.id]; });
@@ -494,8 +512,8 @@ function answerChips(t, { all = false } = {}) {
     const a = t.ans[q.id];
     if (!a) return '';
     if (q.type === 'score') {
-      const l = q.levels.find((x) => x.key === a.lv);
-      return `<span class="chip ${LEVEL_CLASSES(q, a.lv)}" title="${esc(q.label)}: ${esc(l.long)} (score ${a.s.toFixed(2)})">${esc(q.short)} · ${esc(l.label)}</span>`;
+      const label = bandOfAnswer(q, a)?.label || q.levels.find((x) => x.key === a.lv)?.label;
+      return `<span class="chip ${scoreClass(q, a)}" title="${esc(scoreTitle(q, a))}">${esc(q.short)} · ${esc(label)}</span>`;
     }
     if (q.type === 'choice') {
       const i = q.choices.findIndex((c) => c.key === a.c);
@@ -556,7 +574,7 @@ function renderTable(list) {
     const cells = app.questions.map((q) => {
       const a = t.ans?.[q.id];
       if (!a) return '<td class="q muted">–</td>';
-      if (q.type === 'score') return `<td class="q"><span class="chip ${LEVEL_CLASSES(q, a.lv)}" title="${esc(q.levels.find((l) => l.key === a.lv)?.long)}">${a.s.toFixed(2)}</span></td>`;
+      if (q.type === 'score') return `<td class="q"><span class="chip ${scoreClass(q, a)}" title="${esc(scoreTitle(q, a))}">${a.s.toFixed(2)}</span></td>`;
       if (q.type === 'choice') return `<td class="q">${esc(q.choices.find((c) => c.key === a.c)?.label || '')}</td>`;
       return `<td class="q num"><span class="pbar" style="--p:${a.p}"></span>${pct(a.p)}</td>`;
     }).join('');
@@ -608,13 +626,19 @@ function probRows(labels, probs, chosen) {
     + `<span class="pb"><span style="width:${(probs[i] * 100).toFixed(1)}%"></span></span><span class="pv">${pct(probs[i] || 0)}</span></div>`).join('');
 }
 
-function answerBlock(q, a) {
+function answerBlock(q, a, run) {
   if (!a) return '';
   let body = '';
   if (q.type === 'score') {
     const chosen = q.levels.findIndex((l) => l.key === a.lv);
     const max = q.levels[q.levels.length - 1].value;
-    body = `<div class="score-line">Expected level <strong>${a.s.toFixed(2)}</strong> / ${max} → <span class="chip ${LEVEL_CLASSES(q, a.lv)}">${esc(q.levels[chosen].label)}</span></div>`
+    const b = bandOfAnswer(q, a);
+    const cuts = run?.bands?.[q.id]?.cuts || [];
+    const bi = b ? q.bands.indexOf(b) : -1;
+    const range = bi < 0 ? '' : bi < cuts.length ? `score ≥ ${cuts[bi].toFixed(2)}` : `score < ${cuts[cuts.length - 1]?.toFixed(2)}`;
+    body = `<div class="score-line">Expected level <strong>${a.s.toFixed(2)}</strong> / ${max} → <span class="chip ${LEVEL_CLASSES(q, a.lv)}">${esc(q.levels[chosen].label)}</span>`
+      + (b ? ` · band <span class="chip ${BAND_CLASSES(q, a.b)}" title="${esc(b.long)}">${esc(b.label)}</span> <span class="muted small">${esc(range)}: ${esc(b.long)}</span>` : '')
+      + '</div>'
       + probRows([...q.levels].reverse(), [...a.p].reverse(), q.levels.length - 1 - chosen);
   } else if (q.type === 'choice') {
     body = probRows(q.choices, a.p, q.choices.findIndex((c) => c.key === a.c));
@@ -667,7 +691,7 @@ async function renderDetail(id) {
       if (!box) return;
       box.classList.remove('muted', 'small');
       const qs = m.questions.filter((q) => r.questions.includes(q.id));
-      box.innerHTML = a ? qs.map((q) => answerBlock(q, a[q.id])).join('') : '<p class="muted small">Not classified by this run.</p>';
+      box.innerHTML = a ? qs.map((q) => answerBlock(q, a[q.id], r)).join('') : '<p class="muted small">Not classified by this run.</p>';
       const sum = $(`[data-run="${CSS.escape(r.id)}"] summary`);
       if (sum && !a) sum.classList.add('muted');
     });

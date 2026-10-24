@@ -116,12 +116,16 @@ SUMMARY_SYSTEM = (
     "summary_line must be one complete, self-contained sentence (no lists, no code, no trailing colon)."
 )
 
+# gemma-4-E4B returns an empty summary_paragraph about half the time unless the grammar forbids it
+MIN_LINE = 30
+MIN_PARAGRAPH = 80
+
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
-        "summary_line": {"type": "string",
+        "summary_line": {"type": "string", "minLength": MIN_LINE, "maxLength": 400,
                          "description": "one sentence, max 25 words, what the author wants or reports"},
-        "summary_paragraph": {"type": "string", "maxLength": 1500,
+        "summary_paragraph": {"type": "string", "minLength": MIN_PARAGRAPH, "maxLength": 1500,
                               "description": "3-5 sentences: the problem or request, context, and how the thread resolved (if replies are given)"},
     },
     "required": ["summary_line", "summary_paragraph"],
@@ -144,13 +148,22 @@ def summarise(llm, title_en, body_en, replies):
     user = f"Title: {title_en}\n\nOriginal post:\n{_CODE_BLOCK.sub('[code]', body_en)}"
     if replies:
         user += f"\n\nReplies (may be in another language, possibly truncated):\n{replies}"
-    for attempt in range(3):
-        out = llm.chat(SUMMARY_SYSTEM, user, schema=SUMMARY_SCHEMA, max_tokens=1000, temperature=0.2 + 0.3 * attempt)
+    best, last_err = None, None
+    for attempt in range(4):
+        out = llm.chat(SUMMARY_SYSTEM, user, schema=SUMMARY_SCHEMA, max_tokens=1000, temperature=0.2 + 0.25 * attempt)
         try:
-            return json.loads(out)
-        except json.JSONDecodeError:
-            if attempt == 2:
-                raise
+            d = json.loads(out)
+        except json.JSONDecodeError as e:
+            last_err = e
+            continue
+        d = {k: d[k].strip() for k in ("summary_line", "summary_paragraph")}
+        if len(d["summary_line"]) >= MIN_LINE and len(d["summary_paragraph"]) >= MIN_PARAGRAPH:
+            return d
+        if best is None or len(d["summary_paragraph"]) > len(best["summary_paragraph"]):
+            best = d
+    if best is None:
+        raise last_err
+    return best
 
 
 def replies_excerpt(thread_raw):
@@ -178,14 +191,81 @@ def enrich_one(llm, row):
         "lang": lang,
         "title_en": title_en,
         "first_post_en": body_en,
-        "summary_line": s["summary_line"].strip(),
-        "summary_paragraph": s["summary_paragraph"].strip(),
+        "summary_line": s["summary_line"],
+        "summary_paragraph": s["summary_paragraph"],
     }
 
 
-def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, budget_minutes=None, log=print):
+def resummarise(con, llm, model_id, workers=4, limit=None, budget_minutes=None, log=print):
+    """Backfill missing/short summaries from the stored English text (no re-translation).
+    Classifications that used the old summary in their state are deleted so `classify` redoes them."""
+    rows = con.execute(
+        """SELECT id, title_en, first_post_en, thread_raw FROM topics
+           WHERE enriched_at IS NOT NULL
+             AND (length(trim(COALESCE(summary_paragraph, ''))) < ? OR length(trim(COALESCE(summary_line, ''))) < ?)
+           ORDER BY (category_id = ?) DESC, id DESC""",
+        (MIN_PARAGRAPH, MIN_LINE, db.FEATURE_REQUEST_CATEGORY),
+    ).fetchall()
+    if limit:
+        rows = rows[:limit]
+    log(f"[resummarise] {len(rows)} topics with {model_id}")
+
+    def work(row):
+        return summarise(llm, row["title_en"], row["first_post_en"], replies_excerpt(row["thread_raw"]))
+
+    def save(row, s):
+        con.execute(
+            "UPDATE topics SET summary_line=?, summary_paragraph=?, enrich_model=?, enrich_error=NULL WHERE id=?",
+            (s["summary_line"], s["summary_paragraph"], model_id, row["id"]),
+        )
+        con.execute("DELETE FROM classifications WHERE topic_id=? AND model NOT LIKE '%:original'", (row["id"],))
+
+    _run_pool(con, rows, work, save, workers, "resummarise", log, budget_minutes)
+
+
+def _run_pool(con, rows, work, save, workers, label, log, budget_minutes=None):
+    started, done, short = time.monotonic(), 0, 0
+    # vendored copy: --budget-minutes stops starting new topics after the deadline (time-boxed CI runs)
+    deadline = started + budget_minutes * 60 if budget_minutes else None
+
+    def wrapped(row):
+        if deadline and time.monotonic() > deadline:
+            return row, None, "budget"
+        try:
+            return row, work(row), None
+        except Exception as e:
+            return row, None, repr(e)
+
+    pool = ThreadPoolExecutor(workers)
+    try:
+        for fut in as_completed([pool.submit(wrapped, r) for r in rows]):
+            row, out, err = fut.result()
+            if err == "budget":
+                continue
+            if err:
+                con.execute("UPDATE topics SET enrich_error=? WHERE id=?", (err, row["id"]))
+            else:
+                save(row, out)
+                short += len(out["summary_paragraph"]) < MIN_PARAGRAPH
+            con.commit()
+            done += 1
+            if done % 10 == 0 or done == len(rows):
+                rate = done / (time.monotonic() - started)
+                log(f"[{label}] {done}/{len(rows)}  {rate*60:.1f}/min  eta {(len(rows)-done)/rate/3600:.1f} h"
+                    f"  short_paragraphs={short}" + (f"  last error: {err}" if err else ""))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    if done < len(rows):
+        log(f"[{label}] time budget reached: {len(rows) - done} topics left for the next run")
+    db.rebuild_fts(con)
+
+
+def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, budget_minutes=None,
+        resummarise_empty=False, log=print):
     llm = LLM(base_url, model)
     model_id = llm.model_id()
+    if resummarise_empty:
+        return resummarise(con, llm, model_id, workers, limit, budget_minutes, log)
     # vendored copy: --stale also re-enriches topics whose thread text changed after enrichment
     todo = "" if redo else (
         "AND (t.enriched_at IS NULL OR t.enriched_at < COALESCE(t.raw_changed_at, ''))" if stale
@@ -200,37 +280,14 @@ def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, bu
     if limit:
         rows = rows[:limit]
     log(f"[enrich] {len(rows)} topics with {model_id}")
-    started, done = time.monotonic(), 0
-    deadline = started + budget_minutes * 60 if budget_minutes else None
 
-    def work(row):
-        if deadline and time.monotonic() > deadline:
-            return row, None, "budget"
-        try:
-            return row, enrich_one(llm, row), None
-        except Exception as e:
-            return row, None, repr(e)
+    def save(row, out):
+        con.execute(
+            """UPDATE topics SET lang=:lang, title_en=:title_en, first_post_en=:first_post_en,
+                   summary_line=:summary_line, summary_paragraph=:summary_paragraph,
+                   enrich_model=:m, enriched_at=:t, enrich_error=NULL WHERE id=:id""",
+            {**out, "m": model_id, "t": now(), "id": row["id"]},
+        )
+        con.execute("DELETE FROM classifications WHERE topic_id=? AND model NOT LIKE '%:original'", (row["id"],))
 
-    with ThreadPoolExecutor(workers) as pool:
-        for fut in as_completed([pool.submit(work, r) for r in rows]):
-            row, out, err = fut.result()
-            if err == "budget":
-                continue
-            if err:
-                con.execute("UPDATE topics SET enrich_error=? WHERE id=?", (err, row["id"]))
-            else:
-                con.execute(
-                    """UPDATE topics SET lang=:lang, title_en=:title_en, first_post_en=:first_post_en,
-                           summary_line=:summary_line, summary_paragraph=:summary_paragraph,
-                           enrich_model=:m, enriched_at=:t, enrich_error=NULL WHERE id=:id""",
-                    {**out, "m": model_id, "t": now(), "id": row["id"]},
-                )
-            con.commit()
-            done += 1
-            if done % 10 == 0 or done == len(rows):
-                rate = done / (time.monotonic() - started)
-                log(f"[enrich] {done}/{len(rows)}  {rate*60:.1f}/min  eta {(len(rows)-done)/rate/3600:.1f} h"
-                    + (f"  last error: {err}" if err else ""))
-    if done < len(rows):
-        log(f"[enrich] time budget reached: {len(rows) - done} topics left for the next run")
-    db.rebuild_fts(con)
+    _run_pool(con, rows, lambda row: enrich_one(llm, row), save, workers, "enrich", log, budget_minutes)

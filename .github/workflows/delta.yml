@@ -1,5 +1,5 @@
 # Weekly incremental update:
-#   pull encrypted DB → fetch delta from discuss.4d.com → enrich (gemma-4-E4B) → classify (Kev-4B)
+#   pull encrypted DB → fetch delta from discuss.4d.com → enrich + summary backfill (gemma-4-E4B) → classify (Kev-4B)
 #   → export site data → embed new/changed topics → push DB + site data → deploy Pages
 #
 # Models run on the CPU of a standard ubuntu-latest runner (4 vCPU / 16 GB for public repos) with a
@@ -27,7 +27,7 @@ on:
         description: 'Older topics re-checked for edits per run (rolling window)'
         default: '300'
       enrich_budget:
-        description: 'Minutes for the enrich step'
+        description: 'Minutes for enrich + the summary backfill (shared)'
         default: '180'
       classify_budget:
         description: 'Minutes for the classify step'
@@ -109,7 +109,7 @@ jobs:
           /opt/llama/llama-server --version
           echo "LLAMA_SERVER=/opt/llama/llama-server" >> "$GITHUB_ENV"
 
-      - name: Fetch delta, enrich, classify
+      - name: Fetch delta, enrich, backfill summaries, classify
         if: steps.pre.outputs.ok == 'true'
         env:
           FMINER_DB: ${{ github.workspace }}/build/work.db

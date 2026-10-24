@@ -5,7 +5,18 @@
     "short": "FR",
     "order": 1,
     "primary": true,
-    "levels": {"0": "Most unlikely", "1": "Unlikely", "2": "Neutral", "3": "Likely", "4": "Most likely"}
+    "levels": {"0": "Most unlikely", "1": "Unlikely", "2": "Neutral", "3": "Likely", "4": "Most likely"},
+    "_bands": "Filters and chips use these bands instead of the 5 levels: the model's expected score bunches up mid-scale (even the Feature Request category's median is 2.88 of 4), so rounding to the nearest level leaves 'Most likely' almost empty. Each band's lower bound is a quantile of the scores this run gave to the reference set (the Feature Request category), computed per run by build_data.py. A spot check of 50 topics outside the category (Oct 2026) found ~85% real requests from 2.5 up, ~60-75% between ~1.75 and 2.5, and ~10% below 1.75.",
+    "bands": {
+      "reference": "feature_request_category",
+      "min_reference": 30,
+      "fallback": [2.5, 1.75],
+      "bands": [
+        {"key": "high", "label": "High", "quantile": 0.25, "long": "scores like the top 75% of Feature Request category posts"},
+        {"key": "medium", "label": "Medium", "quantile": 0.05, "long": "scores like the lowest 5–25% of Feature Request category posts; often an implicit request"},
+        {"key": "low", "label": "Low", "long": "scores below 95% of Feature Request category posts"}
+      ]
+    }
   },
   "kind": {
     "label": "Post kind",
