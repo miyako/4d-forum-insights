@@ -10,6 +10,7 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `scrape.py` | `store_raw()` only moves `raw_changed_at` when the thread text really changed |
 | `enrich.py`, `classify.py` | `--stale` (redo topics whose input changed) and `--budget-minutes` (time-boxed CI runs) |
 | `enrich.py` (port of upstream `8381102`) | summary schema `minLength`/`maxLength` (line 30–400, paragraph 80–1500 chars); `summarise()` retries up to 4 times with temperature +0.25 per attempt on JSON errors or short fields and keeps the longest result; `--resummarise-empty` backfills missing/short summaries from the stored English text; rewriting a summary deletes the topic's non-`:original` classifications so `classify` redoes them. Unlike upstream, the backfill also honours `--budget-minutes` |
+| `enrich.py` (`LLM.chat`) | JSON-schema requests ban gemma-4's thinking channel (`logit_bias` on `<\|channel>`, no `chat_template_kwargs`); upstream gets empty replies on some topics (11750, 13580). See `../docs/tips.md` |
 | `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
 | `kb.py` (new) | `fminer kb-classify` / `kb-write` / `kb-stats`: the `/tips/` knowledge base (see `../docs/tips.md`) |
 | `ci/run-kb.sh` (new) | runs kb-classify then kb-write, one llama-server at a time (18080 / 18081) |

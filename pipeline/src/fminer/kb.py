@@ -198,42 +198,6 @@ WRITE_VERSION = "kb-v2-" + hashlib.sha1(
 MAX_THREAD_CHARS = 6000
 
 
-class KbLLM(LLM):
-    """gemma-4 with a JSON schema slips into its thinking channel even with enable_thinking=false: the whole token
-    budget goes to reasoning_content and `content` comes back empty. Banning the channel-start token works, but
-    only when chat_template_kwargs is NOT sent (with enable_thinking=false the server ignores the bias)."""
-
-    def __init__(self, base_url, model):
-        super().__init__(base_url, model)
-        self.bias = []
-        try:
-            root = str(self.http.base_url).rstrip("/").removesuffix("/v1")
-            r = self.http.post(root + "/tokenize", json={"content": "<|channel>", "parse_special": True})
-            toks = r.json().get("tokens", [])
-            if len(toks) == 1:
-                self.bias = [[toks[0] if isinstance(toks[0], int) else toks[0]["id"], False]]
-        except Exception:
-            pass
-
-    def chat(self, system, user, schema=None, max_tokens=2048, temperature=0.2):
-        body = {
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if self.model:
-            body["model"] = self.model
-        if self.bias:
-            body["logit_bias"] = self.bias
-        else:
-            body["chat_template_kwargs"] = {"enable_thinking": False}
-        if schema:
-            body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
-        r = self.http.post("/chat/completions", json=body)
-        r.raise_for_status()
-        return (r.json()["choices"][0]["message"].get("content") or "").strip()
-
-
 def thread_excerpt(thread_raw, limit=MAX_THREAD_CHARS):
     """Replies with quotes removed and code shortened (the answer is usually in the replies)."""
     def short_code(m):
@@ -303,7 +267,7 @@ def write_one(llm, row, mode):
 
 def write(con, base_url, model, workers=4, limit=None, min_p=0.0, redo=False, budget_minutes=None, log=print):
     """Write entries for topics whose latest tips classification says solved/tip with probability >= min_p."""
-    llm = KbLLM(base_url, model)
+    llm = LLM(base_url, model)
     model_id = llm.model_id()
     todo = "" if redo else """AND NOT EXISTS (SELECT 1 FROM kb_entries k WHERE k.topic_id=t.id AND k.headline IS NOT NULL
                                   AND k.prompt_version=? AND k.mode=x.mode AND k.created_at >= x.created_at)"""

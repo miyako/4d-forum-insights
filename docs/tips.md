@@ -128,13 +128,13 @@ With `response_format: json_schema`, gemma-4 starts in its *thinking* channel ev
 `chat_template_kwargs: {enable_thinking: false}`. Every token then goes to `reasoning_content`, `content` stays `''`,
 and the request stops with `finish_reason: length`.
 
-`KbLLM` in `pipeline/src/fminer/kb.py` avoids this:
+The vendored `LLM` client in `pipeline/src/fminer/enrich.py`, used by enrich, the summary backfill and kb-write, avoids this for schema requests:
 - it does **not** send `chat_template_kwargs`;
 - it bans the channel token with `logit_bias: [[<id of "<|channel>">, false]]`. The id is looked up once through `/tokenize` with `parse_special`.
 
-With that, the pilot had 0 empty replies.
+Plain requests (translation) keep the upstream body, which never had the problem.
 
-This is very likely why topics 11750 and 13580 failed to enrich upstream (see "Notes on the data" in the README). The vendored `enrich.py` still uses the upstream request, so those two topics may fail again in the delta workflow until the same fix is applied there.
+With the fix the pilot had 0 empty replies. Topics 11750 and 13580, which failed every summary attempt upstream, enrich normally. The upstream `4d-feature-miner` repository is unchanged; apply the same change there if you rerun its enrich.
 
 ## Adding or changing questions
 
