@@ -120,6 +120,8 @@ def describe_question(qid, sample, cfg, upstream):
         keys = sorted(legend, key=lambda k: float(k))
         q["levels"] = [{"key": k, "value": float(k), "label": (c.get("levels") or {}).get(k) or legend[k].capitalize(),
                         "long": legend[k]} for k in keys]
+        if c.get("bands"):
+            q["bands"] = [{k: b[k] for k in ("key", "label", "long", "quantile") if k in b} for b in c["bands"]["bands"]]
     elif qtype == "choice":
         crit = up.get("criteria") if isinstance(up.get("criteria"), dict) else {}
         keys = list(dict.fromkeys(list((c.get("choices") or {}).keys()) + list(crit) +
@@ -133,7 +135,27 @@ def run_id(model, version):
     return slugify(f"{model.split('/')[-1]}-{version}")
 
 
-def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out):
+def quantile(sorted_vals, q):
+    return sorted_vals[min(len(sorted_vals) - 1, int(q * len(sorted_vals)))]
+
+
+def band_cuts(q, scores, cats, cfg_q, fr_cat):
+    """Score thresholds (high → low) for a banded score question in one run.
+
+    The model's expected score bunches up mid-scale, so fixed level cut-offs are not useful. Instead each band's
+    lower bound is a quantile of the scores the run gave to a reference set (default: the Feature Request
+    category), e.g. "high" = at least the score of the reference's 25th percentile. Runs with too few
+    reference topics use the configured fixed fallback cut-offs."""
+    cfg = cfg_q.get(q["id"], {}).get("bands") or {}
+    ref_cat = fr_cat if cfg.get("reference", "feature_request_category") == "feature_request_category" else cfg["reference"]
+    ref = sorted(s for s, c in zip(scores, cats) if s is not None and c == ref_cat)
+    bands = [b for b in cfg.get("bands", []) if "quantile" in b]
+    if len(ref) >= cfg.get("min_reference", 30):
+        return {"cuts": [round(quantile(ref, b["quantile"]), 3) for b in bands], "reference": len(ref), "method": "quantile"}
+    return {"cuts": cfg.get("fallback", []), "reference": len(ref), "method": "fallback"}
+
+
+def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, fr_cat=27):
     hidden = set(cfg_site.get("hidden_runs", []))
     runs, questions = [], {}
     for r in con.execute("SELECT model, prompt_version, COUNT(*) n, MAX(created_at) last FROM classifications "
@@ -184,6 +206,9 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out):
                     col.append(permille(ans.get("noul", ans.get("p"))))
             cols[qid] = col
         rid = run_id(model, version)
+        bands = {qid: band_cuts(q, [a.get(qid, {}).get("score") for a in parsed], [(topic_cat or {}).get(i) for i in ids],
+                                cfg_q, fr_cat)
+                 for qid, q in qmeta.items() if q.get("bands")}
         keys = {qid: [x["key"] for x in q.get("levels") or q.get("choices")]
                 for qid, q in qmeta.items() if q["type"] in ("score", "choice")}
         payload = {"run": rid, "ids": ids, "keys": keys, "answers": cols}
@@ -205,7 +230,7 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out):
         runs.append({
             "id": rid, "model": model, "prompt_version": version, "label": f"{label} · {version}",
             "count": len(ids), "last": r["last"], "questions": sorted(qmeta, key=lambda k: (qmeta[k]["order"], k)),
-            "file": fname,
+            "file": fname, "bands": bands,
         })
     preferred = cfg_site.get("preferred_runs", [])
     default = None
@@ -304,7 +329,8 @@ def main():
     text_file = write_json(out, "text.json", {"count": len(paras), "para": paras})
 
     topic_ids = {r["id"] for r in rows}
-    runs, questions, default_run = build_runs(con, topic_ids, cfg_site, cfg_q, upstream_questions(), out)
+    topic_cat = {r["id"]: r["category_id"] for r in rows}
+    runs, questions, default_run = build_runs(con, topic_ids, cfg_site, cfg_q, upstream_questions(), out, topic_cat, fr_cat)
 
     # keep embeddings produced by an earlier build_embeddings run (it patches the manifest itself)
     prev = load_json(out / "manifest.json", {})
@@ -354,6 +380,9 @@ def main():
     sizes = {p.relative_to(out).as_posix(): p.stat().st_size for p in sorted(out.rglob("*.json"))}
     print(f"{len(rows)} topics ({manifest['stats']['enriched']} enriched), {len(runs)} runs "
           f"(default {default_run}), {len(questions)} questions, {len(tags)} tags")
+    for run in runs:
+        for qid, b in run["bands"].items():
+            print(f"  bands {run['id']} {qid}: cuts {b['cuts']} ({b['method']}, {b['reference']} reference topics)")
     for k, v in sizes.items():
         print(f"  {k:<48} {v / 1024:8.0f} KB")
 

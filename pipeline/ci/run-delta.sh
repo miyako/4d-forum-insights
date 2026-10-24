@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end delta used by .github/workflows/delta.yml (also runs locally on a Mac).
-#   fetch delta (no LLM) → enrich (generative model) → classify (decision model)
-# Both model steps are time-boxed and resumable: whatever does not fit is picked up by the next run.
+#   fetch delta (no LLM) → enrich (generative model) → enrich --resummarise-empty (same model:
+#   backfill missing/short summaries, upstream 8381102) → classify (decision model)
+# All model steps are time-boxed and resumable: whatever does not fit is picked up by the next run.
+# enrich and the backfill share ENRICH_BUDGET.
 #
 # Env: FMINER_DB (working DB), LLAMA_SERVER (llama-server binary), SKIP_MODELS=1, FULL_LIST=1,
 #      SWEEP_WINDOW, SWEEP_RECENT_DAYS, ENRICH_BUDGET / CLASSIFY_BUDGET (minutes), WORKERS, THREADS,
@@ -40,11 +42,12 @@ free_model() {  # runners have ~14 GB of free disk; the two Q8 models together n
     rm -rf ~/.cache/huggingface/hub/models--${repo//\//--} ~/.cache/llama.cpp/${repo//\//_}* || true
 }
 
-pending() {  # prints: <topics to enrich> <topics to classify with DECISION_MODEL>
+pending() {  # prints: <topics to enrich> <summaries to backfill> <topics to classify with DECISION_MODEL>
     uv run -q python - "$DECISION_MODEL" <<'EOF'
 import sys
 from fminer import db
 from fminer.classify import PROMPT_VERSION
+from fminer.enrich import MIN_LINE, MIN_PARAGRAPH
 con = db.connect()
 q = lambda sql, *a: con.execute(sql, a).fetchone()[0]
 enrich = q("""SELECT COUNT(*) FROM topics WHERE first_post_raw IS NOT NULL AND
@@ -52,7 +55,10 @@ enrich = q("""SELECT COUNT(*) FROM topics WHERE first_post_raw IS NOT NULL AND
 classify = q("""SELECT COUNT(*) FROM topics t WHERE t.enriched_at IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model=? AND c.prompt_version=?
                 AND c.created_at >= t.enriched_at)""", sys.argv[1], PROMPT_VERSION)
-print(enrich, classify)
+resummarise = q("""SELECT COUNT(*) FROM topics WHERE enriched_at IS NOT NULL AND
+                   (length(trim(COALESCE(summary_paragraph, ''))) < ? OR length(trim(COALESCE(summary_line, ''))) < ?)""",
+                MIN_PARAGRAPH, MIN_LINE)
+print(enrich, resummarise, classify)
 EOF
 }
 
@@ -63,20 +69,35 @@ echo "::endgroup::"
 if [ "${SKIP_MODELS:-}" = 1 ]; then
     echo "SKIP_MODELS=1: not running the models"
 else
-    read -r to_enrich to_classify < <(pending)
-    echo "pending: enrich=$to_enrich classify=$to_classify"
-    if [ "$to_enrich" -gt 0 ]; then
-        echo "::group::enrich ($to_enrich topics, budget ${ENRICH_BUDGET:-180} min)"
+    read -r to_enrich to_resummarise to_classify < <(pending)
+    echo "pending: enrich=$to_enrich resummarise=$to_resummarise classify=$to_classify"
+    budget=${ENRICH_BUDGET:-180}
+    if [ "$to_enrich" -gt 0 ] || [ "$to_resummarise" -gt 0 ]; then
+        echo "::group::enrich ($to_enrich topics) + summary backfill ($to_resummarise topics), budget $budget min"
+        start=$SECONDS
         # shellcheck disable=SC2086
         $SERVER -hf "$GEN_MODEL" $GEN_ARGS --host 127.0.0.1 --port "$GEN_PORT" -np "$WORKERS" -t "$THREADS" > logs/gen-server.log 2>&1 &
         pid=$!
         wait_ready "$GEN_PORT" $pid logs/gen-server.log
-        fminer enrich --base-url "http://127.0.0.1:$GEN_PORT/v1" --stale --workers "$WORKERS" --budget-minutes "${ENRICH_BUDGET:-180}" || status=$?
+        gen="--base-url http://127.0.0.1:$GEN_PORT/v1 --workers $WORKERS"
+        if [ "$to_enrich" -gt 0 ]; then
+            # shellcheck disable=SC2086
+            fminer enrich $gen --stale --budget-minutes "$budget" || status=$?
+        fi
+        left=$(( budget - (SECONDS - start) / 60 ))
+        if [ -z "${status:-}" ]; then
+            if [ "$left" -ge 5 ]; then
+                # shellcheck disable=SC2086
+                fminer enrich $gen --resummarise-empty --budget-minutes "$left" || status=$?
+            else
+                echo "summary backfill skipped: only $left min of the enrich budget left"
+            fi
+        fi
         stop_server $pid
         free_model "$GEN_MODEL"
         [ -z "${status:-}" ] || exit "$status"
         echo "::endgroup::"
-        read -r to_enrich to_classify < <(pending)
+        read -r to_enrich to_resummarise to_classify < <(pending)
     fi
     if [ "$to_classify" -gt 0 ]; then
         echo "::group::classify ($to_classify topics, budget ${CLASSIFY_BUDGET:-90} min)"
@@ -84,7 +105,7 @@ else
         $SERVER -hf "$DECISION_MODEL" $DECISION_ARGS --host 127.0.0.1 --port "$DECISION_PORT" -np "$WORKERS" -t "$THREADS" > logs/decision-server.log 2>&1 &
         pid=$!
         wait_ready "$DECISION_PORT" $pid logs/decision-server.log
-        fminer classify --base-url "http://127.0.0.1:$DECISION_PORT" --stale --budget-minutes "${CLASSIFY_BUDGET:-90}" || status=$?
+        fminer classify --base-url "http://127.0.0.1:$DECISION_PORT" --stale --workers "$WORKERS" --budget-minutes "${CLASSIFY_BUDGET:-90}" || status=$?
         stop_server $pid
         free_model "$DECISION_MODEL"
         [ -z "${status:-}" ] || exit "$status"

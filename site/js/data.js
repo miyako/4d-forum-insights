@@ -69,6 +69,7 @@ export function loadRun(manifest, runId) {
 
 export function decodeRun(data, manifest) {
   const qs = Object.fromEntries(manifest.questions.map((q) => [q.id, q]));
+  const runMeta = manifest.runs?.find((r) => r.id === data.run);
   const out = new Map();
   data.ids.forEach((id) => out.set(id, {}));
   for (const [qid, col] of Object.entries(data.answers)) {
@@ -78,10 +79,11 @@ export function decodeRun(data, manifest) {
     const own = data.keys?.[qid];
     const global = (q.levels || q.choices || []).map((x) => x.key);
     const map = own ? own.map((k) => global.indexOf(k)) : null;
+    const cuts = runMeta?.bands?.[qid]?.cuts;
     for (let k = 0; k < data.ids.length; k++) {
       const v = col[k];
       if (v == null) continue;
-      out.get(data.ids[k])[qid] = decodeAnswer(q, v, map);
+      out.get(data.ids[k])[qid] = decodeAnswer(q, v, map, cuts);
     }
   }
   return out;
@@ -94,7 +96,14 @@ function remap(values, map, size) {
   return out;
 }
 
-export function decodeAnswer(q, v, map = null) {
+/** Band of a score: the first band whose lower cut the score reaches (cuts are high → low). */
+export function bandOf(q, s, cuts) {
+  if (!q.bands?.length || !cuts?.length) return undefined;
+  const i = cuts.findIndex((c) => s >= c - 1e-9);
+  return q.bands[i < 0 ? Math.min(cuts.length, q.bands.length - 1) : i].key;
+}
+
+export function decodeAnswer(q, v, map = null, cuts = null) {
   if (q.type === 'score') {
     const s = v[0] / 100;
     let best = q.levels[0], bd = Infinity;
@@ -102,7 +111,7 @@ export function decodeAnswer(q, v, map = null) {
       const d = Math.abs(s - l.value);
       if (d < bd - 1e-9 || (Math.abs(d - bd) < 1e-9 && l.value > best.value)) { best = l; bd = d; }
     }
-    return { s, lv: best.key, p: remap(v.slice(1).map((x) => x / 1000), map, q.levels.length) };
+    return { s, lv: best.key, b: bandOf(q, s, cuts), p: remap(v.slice(1).map((x) => x / 1000), map, q.levels.length) };
   }
   if (q.type === 'choice') {
     const ci = v[0] >= 0 ? (map ? map[v[0]] : v[0]) : -1;

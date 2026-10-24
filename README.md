@@ -15,11 +15,11 @@ Main features:
 - **Hybrid search** combines keyword and semantic rankings with reciprocal-rank fusion.
   - The semantic model is loaded lazily, so keyword search never waits for it.
 - **Filters**, built from the question manifest:
-  - every model question: feature-request level, post kind, "asks for a change", "missing capability"
+  - every model question: feature-request band (High / Medium / Low, calibrated per run, see [Notes on the data](#notes-on-the-data)), post kind, "asks for a change", "missing capability"
   - category, or "not in category"
   - language, tags, date range, minimum votes, classified/enriched only
 - **Sorting** by any model score or choice probability, latest activity, date, votes, likes, replies or views.
-- **Preset views**, the main one being **Hidden feature requests**: topics the model rates as likely feature requests that were *not* posted in the Feature Request category (27).
+- **Preset views**, the main one being **Hidden feature requests**: High-band topics that were *not* posted in the Feature Request category (27). **Possible requests** lists the Medium band outside the category, which is mostly implicit requests inside how-to questions.
 - **Topic detail panel**:
   - the English summary
   - every model run's answers with their probability distributions
@@ -107,7 +107,7 @@ Questions are data-driven end to end. To add a question:
 3. `make data` publishes the run:
    - The manifest picks up the question's type, levels and choices from the answers, and its description from the vendored `QUESTIONS`.
    - The UI then shows a filter, a table column, a sort option, card chips and the detail-panel distribution for it, with no code changes.
-4. Optionally, give it a nicer label, short name, order or level/choice labels in `config/questions.json`. Add a preset to `config/site.json` if it deserves one, for example `{"id": "workaround", "label": "Has a workaround", "params": "a.workaround=yes"}`.
+4. Optionally, give it a nicer label, short name, order or level/choice labels in `config/questions.json`. A score question can also get `bands`, coarser filter buckets whose lower bounds are quantiles of the scores the run gave a reference category (see `fr` there); `build_data.py` computes the cut-offs per run and stores them in the manifest (`runs[].bands`). Add a preset to `config/site.json` if it deserves one, for example `{"id": "workaround", "label": "Has a workaround", "params": "a.workaround=yes"}`.
 
 **Multiple runs.** Every (model, prompt_version) pair is a separate run.
 
@@ -115,7 +115,7 @@ Questions are data-driven end to end. To add a question:
 - `config/site.json` → `preferred_runs` picks the default run, and `hidden_runs` hides runs.
 - Run files carry their own level and choice order, so questions can evolve between versions.
 
-URL parameters for answers are `a.<question>=<levels or choices>`, for example `a.fr=3,4` or `a.kind=bug_report`. Yes/no questions use `a.<question>=yes|strong|no`.
+URL parameters for answers are `a.<question>=<bands, levels or choices>`, for example `a.fr=high,medium`, `a.fr=3,4` (levels still work for older links) or `a.kind=bug_report`. Yes/no questions use `a.<question>=yes|strong|no`.
 
 ## Delta updates
 
@@ -129,8 +129,8 @@ URL parameters for answers are `a.<question>=<levels or choices>`, for example `
      - Comparing the raw text costs the same one request as reading `/t/{id}.json` post `version`s, and it is exact.
      - Only a real change moves the new `raw_changed_at` column, which marks the topic for re-enrichment.
    - In the first week of each month it also re-lists every topic (`--full-list`) to refresh votes, views and likes.
-3. **Enrich** new and changed topics with gemma-4-E4B, then **classify** them with Kev-4B (`--stale` redoes topics whose input changed).
-   - Both steps are time-boxed (`--budget-minutes`, 180 + 90 by default) and resumable, so a backlog spreads over several runs.
+3. **Enrich** new and changed topics with gemma-4-E4B, **backfill** missing or short summaries with the same model (`fminer enrich --resummarise-empty`, which also drops those topics' classifications), then **classify** with Kev-4B (`--stale` redoes topics whose input or summary changed).
+   - All model steps are time-boxed (`--budget-minutes`, 180 + 90 by default; enrich and the backfill share the 180) and resumable, so a backlog spreads over several runs.
 4. **Save** the DB. This runs even if a later step fails, so progress is never lost.
 5. **Export** with `make data`, **embed** only the new or changed topics (the previous `site-data.tar.gz` is the cache), upload `site-data.tar.gz`, and **deploy** Pages.
 
@@ -172,7 +172,7 @@ If CPU runs are too slow, or there is a backlog, run the same delta locally and 
 ```sh
 export DB_KEY=...                                  # same passphrase as the secret
 make db-pull                                       # → build/work.db
-LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + classify
+LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + summary backfill + classify
 make db-push                                       # save the DB for the next Actions run
 make snapshot data embeddings FMINER_DB_SRC=build/work.db && make publish
 ```
@@ -181,6 +181,15 @@ The local llama-servers listen on ports 18081 and 18080, so they never collide w
 
 ## Notes on the data
 
-- About 57% of the topics enriched so far have an **empty `summary_paragraph`**; only the one-line summary is filled. The site falls back to the summary line. This looks like an issue in the enrich step's output parsing that is worth fixing upstream.
-- Score levels are bucketed to the nearest level, which is equivalent to the classifier's 0.5, 1.5, 2.5 and 3.5 thresholds. The "Most likely" bucket is therefore rare: it needs an expected score of at least 3.5.
+- In the first enrich pass about 57% of the topics got an **empty `summary_paragraph`** (only the one-line summary was filled). Upstream fixed this in `8381102` (schema minimum lengths, retries and a `--resummarise-empty` backfill), and the vendored pipeline has the same fix. The site still falls back to the summary line for any topic left without a paragraph.
+- **Feature-request bands.** The `fr` answer is an expected level from 0 to 4, and it bunches up mid-scale: the model often splits its probability between "most likely" and "neutral", so even the Feature Request category's median is only 2.88 and almost nothing reaches 3.5. Rounding to the nearest level therefore left "Most likely" nearly empty. Filters and chips use three calibrated bands instead, while the detail panel still shows all five level probabilities:
+
+  | Band | Lower bound (per run) | Kev-4B run | Outside the FR category | Spot check outside the category |
+  |---|---|---|---|---|
+  | High | 25th percentile of FR-category scores | ≥ 2.50 | 380 | ~85% real requests |
+  | Medium | 5th percentile of FR-category scores | ≥ 1.68 | 2,054 | ~60–75% (mostly implicit: "is there a way to…", "this is not possible") |
+  | Low | below that | | 13,564 | ~10% at 1.5–1.75, fewer below |
+
+  The spot check read 50 topics outside the category, drawn at random across the score range. In it the post-kind signal (`kind` = feature request) separated the FR category best overall, but it missed most implicit requests (they are classified as questions), so the presets sort by the `fr` score.
+- Two topics (11750, 13580) failed to enrich: gemma returned an empty reply on every summary attempt. Rerunning `fminer enrich` and then `fminer classify` upstream picks up just those two.
 - Languages come from the enrich step. For topics that are not yet enriched they are guessed from the text and shown as "(guessed)" in the detail panel.

@@ -9,8 +9,14 @@
     {
       "id": "hidden-fr",
       "label": "Hidden feature requests",
-      "description": "Likely feature requests that were NOT posted in the Feature Request category",
-      "params": "a.fr=3,4&xcat=27&sort=a.fr"
+      "description": "High-band feature requests that were NOT posted in the Feature Request category",
+      "params": "a.fr=high&xcat=27&sort=a.fr"
+    },
+    {
+      "id": "maybe-fr",
+      "label": "Possible requests",
+      "description": "Medium-band topics outside the Feature Request category: often an implicit request inside a question",
+      "params": "a.fr=medium&xcat=27&sort=a.fr"
     },
     {
       "id": "gaps",

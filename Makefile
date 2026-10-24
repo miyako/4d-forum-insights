@@ -75,7 +75,7 @@ db-push:
 db-seed: snapshot
 	scripts/db-store.sh push "$(DB)"
 
-## run the delta (fetch + enrich + classify) locally against the working DB, e.g. on a Mac with Metal
+## run the delta (fetch + enrich + summary backfill + classify) locally against the working DB, e.g. on a Mac with Metal
 delta-local:
 	cd pipeline && FMINER_DB="$(abspath $(WORK_DB))" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-delta.sh
 
