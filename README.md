@@ -155,12 +155,12 @@ The pipeline DB is about 160 MB. It contains full thread text, and this reposito
 - The passphrase is the repository secret `DB_KEY`.
 - Release assets survive indefinitely and have no size problem. The Actions cache would be evicted after 7 days of inactivity.
 
-One-time setup, after `~/4d-feature-miner` has finished:
+One-time setup, after `~/4d-feature-miner` has finished. **Step-by-step guide: [docs/delta-setup.md](docs/delta-setup.md)**, which covers the Keychain, the GitHub secret, seeding, and losing or rotating the key.
 
 ```sh
-export DB_KEY="$(openssl rand -base64 32)"        # keep it, e.g. in your password manager
-gh secret set DB_KEY --body "$DB_KEY"
-make db-seed                                       # snapshot ~/4d-feature-miner's DB → encrypted release asset
+security add-generic-password -a "$USER" -s 4d-forum-insights-DB_KEY -w "$(openssl rand -base64 32)"   # Keychain
+security find-generic-password -s 4d-forum-insights-DB_KEY -w | tr -d '\n' | gh secret set DB_KEY  # GitHub secret
+DB_KEY="$(security find-generic-password -s 4d-forum-insights-DB_KEY -w)" make db-seed           # snapshot → encrypted release asset
 ```
 
 Until the DB is seeded, the delta workflow logs a warning and does nothing.
@@ -170,7 +170,7 @@ Until the DB is seeded, the delta workflow logs a warning and does nothing.
 If CPU runs are too slow, or there is a backlog, run the same delta locally and push the results:
 
 ```sh
-export DB_KEY=...                                  # same passphrase as the secret
+export DB_KEY="$(security find-generic-password -s 4d-forum-insights-DB_KEY -w)"   # same passphrase as the secret
 make db-pull                                       # → build/work.db
 LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + summary backfill + classify
 make db-push                                       # save the DB for the next Actions run
