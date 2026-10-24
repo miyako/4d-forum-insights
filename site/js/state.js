@@ -1,7 +1,7 @@
 // Search state ⇄ query string, so every view is shareable.
 //   q, mode (kw|hyb|sem), sort, run, view (list|table), t (open topic),
 //   cat, xcat, lang, tag (comma lists), from, to (YYYY-MM-DD), votes, cls=1, enriched=1,
-//   a.<question>=… (score levels / choices as comma list; noul: yes|strong|no)
+//   a.<question>=… (score bands or levels / choices as comma list; noul: yes|strong|no)
 
 const LISTS = ['cat', 'xcat', 'lang', 'tag'];
 

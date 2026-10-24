@@ -46,7 +46,8 @@ export function buildPredicates(state, ctx) {
     if (!v || (Array.isArray(v) && !v.length)) continue;
     if (q.type === 'score') {
       const s = new Set(v);
-      add('a.' + q.id, (t) => { const a = t.ans?.[q.id]; return !!a && s.has(a.lv); });
+      // band keys (high, medium, …) or level keys (0–4, older shared links) both work
+      add('a.' + q.id, (t) => { const a = t.ans?.[q.id]; return !!a && (s.has(a.b) || s.has(a.lv)); });
     } else if (q.type === 'choice') {
       const s = new Set(v);
       add('a.' + q.id, (t) => { const a = t.ans?.[q.id]; return !!a && s.has(a.c); });

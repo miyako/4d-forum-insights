@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { emptyState, parseState, serializeState, hasFilters } from '../site/js/state.js';
 import { buildPredicates, applyFilters, facetCounts, sortTopics, rrf, dateToDays, daysToDate } from '../site/js/filter.js';
 import { tokenize, normalize, KeywordIndex } from '../site/js/search.js';
-import { decodeAnswer, decodeRun } from '../site/js/data.js';
+import { decodeAnswer, decodeRun, bandOf } from '../site/js/data.js';
 import { topK } from '../site/js/semantic.js';
 
 const FR = {
@@ -53,6 +53,41 @@ test('decodeAnswer buckets scores to the nearest level and scales probabilities'
   assert.equal(topics[0].ans.kind.c, 'feature_request');
   assert.equal(topics[0].ans.request.p, 0.95);
   assert.equal(decodeAnswer(KIND, [-1, 0, 0, 0]).c, null);
+});
+
+const FRB = { ...FR, bands: [{ key: 'high', label: 'High', quantile: 0.25 }, { key: 'medium', label: 'Medium', quantile: 0.05 }, { key: 'low', label: 'Low' }] };
+const CUTS = [2.5, 1.68];
+
+test('score bands come from the run\'s cut-offs (high → low), independent of the nearest level', () => {
+  assert.equal(bandOf(FRB, 2.88, CUTS), 'high');
+  assert.equal(bandOf(FRB, 2.5, CUTS), 'high', 'a cut-off is inclusive');
+  assert.equal(bandOf(FRB, 2.49, CUTS), 'medium');
+  assert.equal(bandOf(FRB, 1.68, CUTS), 'medium');
+  assert.equal(bandOf(FRB, 0.7, CUTS), 'low');
+  assert.equal(bandOf(FR, 3, CUTS), undefined, 'questions without bands');
+  assert.equal(bandOf(FRB, 3, undefined), undefined, 'runs without cut-offs');
+  const a = decodeAnswer(FRB, [262, 0, 0, 300, 400, 300], null, CUTS);
+  assert.equal(a.lv, '3');
+  assert.equal(a.b, 'high');
+  const run = decodeRun({ run: 'r1', ids: [5, 6], answers: { fr: [[262, 0, 0, 300, 400, 300], [190, 0, 200, 700, 100, 0]] } },
+    { questions: [FRB], runs: [{ id: 'r1', bands: { fr: { cuts: CUTS } } }] });
+  assert.equal(run.get(5).fr.b, 'high');
+  assert.equal(run.get(6).fr.b, 'medium');
+});
+
+test('score filters accept band keys and (for older links) level keys', () => {
+  const list = [
+    T(1, { ans: { fr: decodeAnswer(FRB, [262, 0, 0, 300, 400, 300], null, CUTS) } }),
+    T(2, { ans: { fr: decodeAnswer(FRB, [190, 0, 200, 700, 100, 0], null, CUTS) } }),
+    T(3, { ans: { fr: decodeAnswer(FRB, [80, 900, 100, 0, 0, 0], null, CUTS) } }),
+  ];
+  const run = (qs) => applyFilters(list, buildPredicates(parseState(qs, [FRB]), { questions: [FRB], flags: FLAGS })).map((t) => t.id);
+  assert.deepEqual(run('a.fr=high'), [1]);
+  assert.deepEqual(run('a.fr=high,medium'), [1, 2]);
+  assert.deepEqual(run('a.fr=low'), [3]);
+  assert.deepEqual(run('a.fr=3'), [1], 'legacy level link');
+  const byBand = facetCounts(list, buildPredicates(parseState('a.fr=high', [FRB]), { questions: [FRB], flags: FLAGS }), 'a.fr', (t) => t.ans?.fr?.b);
+  assert.deepEqual(Object.fromEntries(byBand), { high: 1, medium: 1, low: 1 });
 });
 
 test('decodeRun maps a run\'s own choice order onto the manifest order', () => {
