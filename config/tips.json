@@ -1,0 +1,41 @@
+{
+  "_comment": "Display config for the /tips/ knowledge base. Questions and runs come from the 'tips-…' classifications (pipeline/src/fminer/kb.py); entries from kb_entries.",
+  "title": "4D Forum Tips",
+  "description": "Questions answered and know-how shared on the 4D forum, rewritten by a local model into short knowledge-base entries. Always check the original thread.",
+  "preferred_runs": ["ggml-org/Kev-4B-GGUF:Q8_0"],
+  "area_min_p": 0.25,
+  "questions": {
+    "area": {
+      "label": "Area",
+      "order": 1,
+      "choices": {
+        "language": "Language",
+        "interface": "Interface",
+        "database": "Database",
+        "web": "Web & network",
+        "administration": "Administration",
+        "write_pro": "4D Write Pro",
+        "view_pro": "4D View Pro",
+        "third_party": "Third party",
+        "other": "Other"
+      }
+    },
+    "qa": {
+      "label": "Type",
+      "order": 2,
+      "choices": {
+        "solved": "Answered question",
+        "tip": "Tip",
+        "open": "Open question",
+        "other": "Other"
+      }
+    }
+  },
+  "presets": [
+    {"id": "orda", "label": "ORDA", "params": "area=database&q=orda"},
+    {"id": "forms", "label": "Forms & list boxes", "params": "area=interface&q=form listbox"},
+    {"id": "server", "label": "4D Server", "params": "area=administration&q=server"},
+    {"id": "rest", "label": "REST & HTTP", "params": "area=web&q=rest http"},
+    {"id": "tips", "label": "Tips only", "params": "type=tip"}
+  ]
+}

@@ -3,6 +3,7 @@
 #   make all          snapshot + data + embeddings (run once ~/4d-feature-miner has finished)
 #   make serve        preview on http://127.0.0.1:8000
 #   make publish      upload site/data as a release asset and redeploy GitHub Pages
+#   make kb-pilot     knowledge base (/tips/) on a 300-topic sample in a copy of the DB (build/tips.db)
 #
 # The source DB is only ever read: `snapshot` copies it with sqlite's online .backup (read-only open).
 
@@ -12,9 +13,11 @@ WORK_DB       ?= build/work.db
 RELEASE       ?= data
 PY            := uv run -q --project pipeline python
 PORT          ?= 8000
+KB_DB         ?= $(WORK_DB)
+KB_SAMPLE     ?= 300
 
 .PHONY: all snapshot data embeddings embeddings-sample vendor test serve site-data publish \
-        db-pull db-push db-seed delta-local clean
+        db-pull db-push db-seed delta-local kb kb-pilot kb-stats clean
 
 all: snapshot data embeddings
 
@@ -74,6 +77,18 @@ db-push:
 ## seed the delta workflow's DB from a snapshot of the local pipeline (after it has finished)
 db-seed: snapshot
 	scripts/db-store.sh push "$(DB)"
+
+## knowledge base (/tips/): kb-classify (decision model), then kb-write (generative model), one server at a time.
+## Resumable; KB_DB defaults to the delta workflow's working DB (make db-pull first, make db-push after).
+kb:
+	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-kb.sh
+## pilot: a sample of KB_SAMPLE topics in build/tips.db (a copy of the snapshot), then preview with
+## make data DB=build/tips.db && make serve
+kb-pilot:
+	@test -f build/tips.db || cp "$(DB)" build/tips.db
+	cd pipeline && FMINER_DB="$(abspath build/tips.db)" SAMPLE="$(KB_SAMPLE)" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-kb.sh
+kb-stats:
+	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" uv run -q fminer kb-stats
 
 ## run the delta (fetch + enrich + summary backfill + classify) locally against the working DB, e.g. on a Mac with Metal
 delta-local:

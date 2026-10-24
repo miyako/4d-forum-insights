@@ -11,6 +11,8 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `enrich.py`, `classify.py` | `--stale` (redo topics whose input changed) and `--budget-minutes` (time-boxed CI runs) |
 | `enrich.py` (port of upstream `8381102`) | summary schema `minLength`/`maxLength` (line 30–400, paragraph 80–1500 chars); `summarise()` retries up to 4 times with temperature +0.25 per attempt on JSON errors or short fields and keeps the longest result; `--resummarise-empty` backfills missing/short summaries from the stored English text; rewriting a summary deletes the topic's non-`:original` classifications so `classify` redoes them. Unlike upstream, the backfill also honours `--budget-minutes` |
 | `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
+| `kb.py` (new) | `fminer kb-classify` / `kb-write` / `kb-stats`: the `/tips/` knowledge base (see `../docs/tips.md`) |
+| `ci/run-kb.sh` (new) | runs kb-classify then kb-write, one llama-server at a time (18080 / 18081) |
 | `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
 
 **Keep `classify.QUESTIONS` identical to upstream**: the prompt version stored with every classification is a

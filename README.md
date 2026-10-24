@@ -27,6 +27,7 @@ Main features:
   - a link to the original thread
 - **Shareable URLs**: the whole search state (query, mode, filters, sort, run, view, open topic) is kept in the query string.
 - **Card and table views**, and a mobile layout.
+- **Tips** (`/tips/`): a knowledge base of answered questions and shared know-how, rewritten by a local model into short question + answer entries, by area (Language, Interface, Database, Web & network, Administration, 4D Write Pro, 4D View Pro, Third party, Other), with keyword, semantic and hybrid search. See [docs/tips.md](docs/tips.md).
 - **Light, dark or Auto theme**. Auto follows the OS and is the default. The choice is kept in localStorage and applied before first paint, so the page never flashes the wrong theme.
 
 Only titles, machine-translated titles, model-written summaries, metadata, model answers and links are published.
@@ -49,17 +50,18 @@ flowchart LR
 
 | Path | What it is |
 |------|------------|
-| `site/` | The static site. Vanilla ES modules with no build step: `index.html`, `css/`, `js/`, and `vendor/minisearch.js`. |
+| `site/` | The static site. Vanilla ES modules with no build step: `index.html`, `tips/index.html`, `css/`, `js/`, and `vendor/minisearch.js`. |
 | `site/data/` | Generated data. It is not committed; it is published as the release asset `site-data.tar.gz`. |
 | `config/questions.json` | Display labels for the model questions (all optional). |
 | `config/site.json` | Title, Feature Request category, preferred model run, preset views, embedding model. |
+| `config/tips.json` | The `/tips/` page: labels for areas and types, presets, the area threshold, preferred run. |
 | `scripts/build_data.py` | Exports the published data from `forum.db`, opened read-only. |
 | `scripts/build_embeddings.mjs` | Builds the quantised topic embeddings, incrementally. |
 | `scripts/db-store.sh` | Pulls/pushes the delta workflow's encrypted working DB. |
 | `pipeline/` | A vendored copy of the `fminer` pipeline plus the `delta` command (see `pipeline/README.md`). |
 | `.github/workflows/pages.yml` | Deploys the site with `actions/deploy-pages`. |
 | `.github/workflows/delta.yml` | Weekly incremental update. |
-| `tests/` | `node --test` unit tests for state, filters, sorting, search and decoding. |
+| `tests/` | `node --test` unit tests for state, filters, sorting, search, decoding and the tips page logic. |
 
 ### Published data format
 
@@ -71,6 +73,7 @@ All files are in `site/data/` and are referenced from `manifest.json` with conte
 | `topics.json` | 4.7 MB (1.7 MB gzipped) | Columnar `{fields, rows}`: id, slug, title, title_en, cat, tags, lang, created, active, posts, views, likes, votes, flags, summary line. |
 | `text.json` | 2.2 MB (0.7 MB gzipped) | Summary paragraphs aligned with the rows. Loaded after first paint and then added to the index. |
 | `answers/<run>.json` | 20–500 KB | One file per model + prompt_version run: `{ids, keys, answers: {question: column}}`. Scores and probabilities are integers (score×100, permille). |
+| `tips/answers/<run>.json`, `tips/entries.json` | est. ~1 MB + ~3.5 MB (0.4 + 1.3 MB gzipped) for the full run | The `/tips/` knowledge base: area + Q&A type per topic, and the written entries. See [docs/tips.md](docs/tips.md). |
 | `embeddings.bin` | ~6.5 MB | N × 384 int8 vectors (scaled per vector), plus `embeddings-ids.json`. Loaded only when semantic or hybrid search is used. |
 
 Why MiniSearch over JSON instead of SQLite in the browser? With about 17k small records, the slim JSON compresses to about 2.4 MB in total. An in-memory index then gives instant faceting, and every facet count updates as you type. sql.js would add about 1 MB of wasm, and sql.js-httpvfs is only worth it for much larger datasets.
@@ -116,6 +119,15 @@ Questions are data-driven end to end. To add a question:
 - Run files carry their own level and choice order, so questions can evolve between versions.
 
 URL parameters for answers are `a.<question>=<bands, levels or choices>`, for example `a.fr=high,medium`, `a.fr=3,4` (levels still work for older links) or `a.kind=bug_report`. Yes/no questions use `a.<question>=yes|strong|no`.
+
+## Tips knowledge base
+
+`/tips/` reuses the same data, plus one more decision-model run and one generative step:
+- `fminer kb-classify` (Kev-4B) gives each topic an area and a Q&A type.
+- `fminer kb-write` (gemma) rewrites answered questions and tips as a question + answer.
+
+`make kb-pilot` runs a 300-topic pilot in a copy of the DB. `make kb` runs the full, resumable run on the working DB, one model server at a time.
+The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot results are in [docs/tips.md](docs/tips.md).
 
 ## Delta updates
 
@@ -191,5 +203,5 @@ The local llama-servers listen on ports 18081 and 18080, so they never collide w
   | Low | below that | | 13,564 | ~10% at 1.5–1.75, fewer below |
 
   The spot check read 50 topics outside the category, drawn at random across the score range. In it the post-kind signal (`kind` = feature request) separated the FR category best overall, but it missed most implicit requests (they are classified as questions), so the presets sort by the `fr` score.
-- Two topics (11750, 13580) failed to enrich: gemma returned an empty reply on every summary attempt. Rerunning `fminer enrich` and then `fminer classify` upstream picks up just those two.
+- Two topics (11750, 13580) failed to enrich: gemma returned an empty reply on every summary attempt. The likely cause is that gemma-4 slips into its thinking channel under a JSON schema even with `enable_thinking=false`, so `content` stays empty. The tips writer avoids this with a logit bias (see [docs/tips.md](docs/tips.md#the-gemma-empty-reply-bug-and-fix)); `enrich.py` does not have that fix yet.
 - Languages come from the enrich step. For topics that are not yet enriched they are guessed from the text and shown as "(guessed)" in the detail panel.

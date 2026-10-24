@@ -56,6 +56,28 @@ def main() -> None:
     p.add_argument("path", nargs="?", default="data/topics.jsonl")
     p.add_argument("--model")
 
+    # vendored copy: knowledge base ("tips"), see kb.py
+    p = sub.add_parser("kb-classify", help="tips: topic area + Q&A kind with the decision model")
+    p.add_argument("--base-url", default="http://127.0.0.1:8080")
+    p.add_argument("--model", default="")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--limit", type=int)
+    p.add_argument("--sample", type=int, help="classify a random sample of N enriched topics")
+    p.add_argument("--stale", action="store_true", help="also redo topics re-enriched since they were classified")
+    p.add_argument("--budget-minutes", type=float)
+
+    p = sub.add_parser("kb-write", help="tips: write Q&A / tip entries for solved and tip topics (generative model)")
+    p.add_argument("--base-url", default="http://127.0.0.1:8081/v1")
+    p.add_argument("--model", default="")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--limit", type=int)
+    p.add_argument("--min-p", type=float, default=0.0,
+                   help="minimum probability of the solved/tip choice (default 0: the writer checks answered itself)")
+    p.add_argument("--redo", action="store_true")
+    p.add_argument("--budget-minutes", type=float)
+
+    sub.add_parser("kb-stats", help="tips: show progress")
+
     sub.add_parser("index", help="rebuild the full-text index")
     sub.add_parser("stats", help="show progress")
 
@@ -91,6 +113,16 @@ def main() -> None:
     elif a.cmd == "export":
         from . import query
         query.export(con, a.path, a.model)
+    elif a.cmd.startswith("kb-"):
+        from . import kb
+        con = kb.connect()
+        if a.cmd == "kb-classify":
+            kb.classify(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample, stale=a.stale,
+                        budget_minutes=a.budget_minutes)
+        elif a.cmd == "kb-write":
+            kb.write(con, a.base_url, a.model, workers=a.workers, limit=a.limit, min_p=a.min_p, redo=a.redo,
+                     budget_minutes=a.budget_minutes)
+        kb.stats(con)
     elif a.cmd == "index":
         db.rebuild_fts(con)
     elif a.cmd == "stats":

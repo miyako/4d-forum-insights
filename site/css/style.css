@@ -88,6 +88,8 @@ button { font: inherit; color: inherit; }
   font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--text); max-width: 260px;
 }
 
+.btn.switch { flex: none; white-space: nowrap; }
+.btn.switch[hidden] { display: none; }
 .theme-menu { position: relative; flex: none; }
 .theme-btn { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .theme-btn:hover, .theme-btn[aria-expanded=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
