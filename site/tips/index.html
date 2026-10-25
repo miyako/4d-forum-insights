@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>4D Forum Tips</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="A knowledge base mined from the 4D forum (discuss.4d.com): answered questions and tips, by area, with keyword and semantic search.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f7b46'/%3E%3Ctext x='16' y='22' font-family='Arial' font-weight='700' font-size='15' fill='white' text-anchor='middle'%3E4D%3C/text%3E%3C/svg%3E">
+  <script>/* theme before first paint: auto (no attribute) follows the OS; see js/theme.js */
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.setAttribute('data-theme', t);
+        document.querySelector('meta[name=color-scheme]').content = t;
+      }
+    } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="stylesheet" href="../css/tips.css">
+  <link rel="modulepreload" href="../js/tips.js">
+  <script type="module" src="../js/theme.js"></script>
+  <link rel="preload" href="../data/manifest.json" as="fetch" crossorigin>
+</head>
+<body class="tips-page">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-light" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></symbol>
+    <symbol id="i-dark" viewBox="0 0 24 24"><path fill="currentColor" d="M20.2 14.6A8.5 8.5 0 0 1 9.4 3.8a8.5 8.5 0 1 0 10.8 10.8z"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></symbol>
+  </svg>
+  <header class="topbar">
+    <a class="brand" href="./" title="Reset">
+      <span class="logo tips-logo">4D</span><span class="brand-text">Forum Tips</span>
+    </a>
+    <form class="search" id="search-form" role="search" autocomplete="off">
+      <input id="q" type="search" placeholder="Ask or search…  ( / )" aria-label="Search the knowledge base" spellcheck="false">
+      <div class="modes" role="radiogroup" aria-label="Search mode">
+        <button type="button" data-mode="kw" role="radio" title="Keyword search">Keyword</button>
+        <button type="button" data-mode="hyb" role="radio" title="Keyword + semantic, fused ranking">Hybrid</button>
+        <button type="button" data-mode="sem" role="radio" title="Semantic search (meaning, not words)">Semantic</button>
+      </div>
+    </form>
+    <a class="btn switch" href="../" title="Feature requests, bugs and every forum topic">Forum Insights</a>
+    <div class="theme-menu" id="theme-menu">
+      <button type="button" class="icon theme-btn" id="theme-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-list"
+              aria-label="Color theme: Auto (follows system)" title="Color theme: Auto (follows system)">
+        <svg class="ico" aria-hidden="true"><use href="#i-auto"></use></svg>
+      </button>
+      <ul class="theme-list" id="theme-list" role="menu" aria-label="Color theme" hidden>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="auto" aria-checked="true"><svg class="ico" aria-hidden="true"><use href="#i-auto"></use></svg>Auto <span class="muted">(system)</span></li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="light" aria-checked="false"><svg class="ico" aria-hidden="true"><use href="#i-light"></use></svg>Light</li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="dark" aria-checked="false"><svg class="ico" aria-hidden="true"><use href="#i-dark"></use></svg>Dark</li>
+      </ul>
+    </div>
+  </header>
+
+  <nav class="areas" id="areas" aria-label="Areas"></nav>
+
+  <main class="tips-main">
+    <div class="toolbar tips-toolbar">
+      <div class="count" id="count" aria-live="polite">Loading…</div>
+      <div class="toolbar-right">
+        <div class="types" id="types" role="group" aria-label="Type"></div>
+        <label title="Minimum model confidence for the type">Confidence <select id="conf">
+          <option value="0">Any</option><option value="50">≥ 50%</option><option value="70">≥ 70%</option></select></label>
+        <label>Since <select id="since"></select></label>
+        <label>Sort <select id="sort"></select></label>
+      </div>
+    </div>
+    <nav class="presets tips-presets" id="presets" aria-label="Examples"></nav>
+    <div class="status" id="status" hidden></div>
+    <div id="results"></div>
+    <div class="more" id="more"></div>
+  </main>
+
+  <footer class="footer" id="footer"></footer>
+
+  <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
+  <script type="module" src="../js/tips.js"></script>
+</body>
+</html>

@@ -75,9 +75,35 @@ def restore_code(text, blocks):
 
 
 class LLM:
+    """Chat client for llama-server.
+
+    vendored copy: gemma-4 with a JSON schema (response_format) slips into its thinking channel even with
+    enable_thinking=false. The whole token budget then goes to reasoning_content and `content` comes back empty
+    (upstream: topics 11750 and 13580 failed every summary attempt). For schema requests the channel-start token
+    "<|channel>" is banned with logit_bias instead; that only works when chat_template_kwargs is NOT sent (with
+    enable_thinking=false the server ignores the bias). Plain requests (translation) keep the upstream body."""
+
+    THINK_TOKEN = "<|channel>"
+
     def __init__(self, base_url, model):
         self.http = httpx.Client(base_url=base_url, timeout=600)
         self.model = model
+        self._bias = None
+
+    def schema_bias(self):
+        """logit_bias that bans the thinking-channel token, or [] if the model has no such single token."""
+        if self._bias is None:
+            self._bias = []
+            try:
+                root = str(self.http.base_url).rstrip("/").removesuffix("/v1")
+                r = self.http.post(root + "/tokenize", json={"content": self.THINK_TOKEN, "parse_special": True})
+                toks = r.json().get("tokens", [])
+                if len(toks) == 1:
+                    tok = toks[0] if isinstance(toks[0], int) else toks[0]["id"]
+                    self._bias = [[tok, False]]
+            except Exception:
+                pass
+        return self._bias
 
     def chat(self, system, user, schema=None, max_tokens=2048, temperature=0.2):
         body = {
@@ -85,13 +111,17 @@ class LLM:
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "chat_template_kwargs": {"enable_thinking": False},
         }
+        bias = self.schema_bias() if schema else []
+        if bias:
+            body["logit_bias"] = bias
+        else:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if schema:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}
         r = self.http.post("/chat/completions", json=body)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        return (r.json()["choices"][0]["message"].get("content") or "").strip()
 
     def model_id(self):
         if self.model:

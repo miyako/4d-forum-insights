@@ -8,6 +8,8 @@ than at the live database of a running pipeline. Writes into ``--out`` (default 
   topics.json          one row per topic (columnar), no post text
   text.json            the one-paragraph LLM summaries (loaded lazily by the browser)
   answers/<run>.json   per model run: compact model answers for every classified topic
+  tips/entries.json    knowledge-base entries (generated question/headline + answer) for the /tips/ page;
+                       the "tips-…" runs (topic area, Q&A kind) are listed under manifest.tips, not manifest.runs
 
 and ``build/embed-input.jsonl`` (NOT published) for ``scripts/build_embeddings.mjs``.
 
@@ -71,12 +73,19 @@ def lang_detector():
         return lambda text, slug=None: hints.get(slug, "en")
 
 
-def upstream_questions():
+def upstream_questions(module="classify"):
     try:
-        from fminer.classify import QUESTIONS
+        if module == "kb":
+            from fminer.kb import QUESTIONS
+        else:
+            from fminer.classify import QUESTIONS
         return QUESTIONS
     except Exception:
         return {}
+
+
+def is_tips_run(version):
+    return (version or "").startswith("tips-")
 
 
 def strip_markup(text, limit):
@@ -155,13 +164,13 @@ def band_cuts(q, scores, cats, cfg_q, fr_cat):
     return {"cuts": cfg.get("fallback", []), "reference": len(ref), "method": "fallback"}
 
 
-def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, fr_cat=27):
+def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, fr_cat=27, tips=False):
     hidden = set(cfg_site.get("hidden_runs", []))
     runs, questions = [], {}
     for r in con.execute("SELECT model, prompt_version, COUNT(*) n, MAX(created_at) last FROM classifications "
                          "GROUP BY 1,2 ORDER BY n DESC").fetchall():
         model, version = r["model"], r["prompt_version"]
-        if model in hidden or f"{model}/{version}" in hidden:
+        if model in hidden or f"{model}/{version}" in hidden or is_tips_run(version) != tips:
             continue
         rows = con.execute(
             "SELECT * FROM classifications WHERE model=? AND prompt_version=? ORDER BY topic_id",
@@ -212,7 +221,7 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, f
         keys = {qid: [x["key"] for x in q.get("levels") or q.get("choices")]
                 for qid, q in qmeta.items() if q["type"] in ("score", "choice")}
         payload = {"run": rid, "ids": ids, "keys": keys, "answers": cols}
-        fname = write_json(out, f"answers/{rid}.json", payload)
+        fname = write_json(out, f"{'tips/' if tips else ''}answers/{rid}.json", payload)
         for qid, q in qmeta.items():
             g = questions.setdefault(qid, dict(q))
             if g["type"] != q["type"]:
@@ -246,6 +255,42 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, f
         score = [q for q in qs if q["type"] == "score"]
         (score or qs)[0]["primary"] = True
     return runs, qs, default
+
+
+def build_tips(con, topic_ids, cfg, out):
+    """Knowledge base for /tips/: the "tips-…" runs (area, qa) plus the generated entries (kb_entries)."""
+    runs, questions, default_run = build_runs(con, topic_ids, cfg, cfg.get("questions", {}), upstream_questions("kb"),
+                                              out, tips=True)
+    if not runs:
+        return None
+    has_entries = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kb_entries'").fetchone() is not None
+    rows = con.execute(
+        """SELECT topic_id, mode, headline, body, answered, problems FROM kb_entries
+           WHERE headline IS NOT NULL ORDER BY topic_id""").fetchall() if has_entries else []
+    rows = [r for r in rows if r["topic_id"] in topic_ids]
+    modes = sorted({r["mode"] for r in rows})
+    entries = {
+        "ids": [r["topic_id"] for r in rows],
+        "modes": modes,
+        "mode": [modes.index(r["mode"]) for r in rows],
+        "headline": [r["headline"] for r in rows],
+        "body": [r["body"] for r in rows],
+        # 1 = the writer confirmed the thread answers/teaches something, 0 = it did not, 2 = it did but the text
+        # still fails a quality check (length, cut off, not phrased as a question)
+        "ok": [0 if r["answered"] == 0 else 2 if (r["problems"] or "[]") != "[]" else 1 for r in rows],
+    }
+    return {
+        "title": cfg.get("title", "4D Forum Tips"),
+        "description": cfg.get("description", ""),
+        "runs": runs,
+        "questions": questions,
+        "default_run": default_run,
+        "area_min_p": cfg.get("area_min_p", 0.25),
+        "presets": cfg.get("presets", []),
+        "entries": len(rows),
+        "files": {"entries": write_json(out, "tips/entries.json", entries)},
+    }
 
 
 # --------------------------------------------------------------------------- output helpers
@@ -331,6 +376,7 @@ def main():
     topic_ids = {r["id"] for r in rows}
     topic_cat = {r["id"]: r["category_id"] for r in rows}
     runs, questions, default_run = build_runs(con, topic_ids, cfg_site, cfg_q, upstream_questions(), out, topic_cat, fr_cat)
+    tips = build_tips(con, topic_ids, load_json(Path(a.config) / "tips.json", {}), out)
 
     # keep embeddings produced by an earlier build_embeddings run (it patches the manifest itself)
     prev = load_json(out / "manifest.json", {})
@@ -344,7 +390,7 @@ def main():
         "stats": {
             "topics": len(rows),
             "enriched": sum(1 for r in rows if r["enriched_at"]),
-            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications"),
+            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications WHERE prompt_version NOT LIKE 'tips-%'"),
             "last_topic": max((r["created_at"] for r in rows if r["created_at"]), default=None),
             "last_fetch": q1("SELECT MAX(raw_fetched_at) FROM topics"),
         },
@@ -363,12 +409,14 @@ def main():
         "default_run": default_run,
         "presets": cfg_site.get("presets", []),
         "files": {"topics": topics_file, "text": text_file},
+        "tips": tips,
         "embeddings": prev.get("embeddings"),
         "embedding_config": cfg_site.get("embeddings"),
     }
     write_json(out, "manifest.json", manifest)
 
-    classified = {r[0] for r in con.execute("SELECT DISTINCT topic_id FROM classifications")}
+    classified = {r[0] for r in con.execute(
+        "SELECT DISTINCT topic_id FROM classifications WHERE prompt_version NOT LIKE 'tips-%'")}
     for e in embed:
         e["c"] = int(e["id"] in classified)
     ep = Path(a.embed_input)
@@ -380,6 +428,8 @@ def main():
     sizes = {p.relative_to(out).as_posix(): p.stat().st_size for p in sorted(out.rglob("*.json"))}
     print(f"{len(rows)} topics ({manifest['stats']['enriched']} enriched), {len(runs)} runs "
           f"(default {default_run}), {len(questions)} questions, {len(tags)} tags")
+    if tips:
+        print(f"  tips: {len(tips['runs'])} runs, {tips['entries']} knowledge-base entries")
     for run in runs:
         for qid, b in run["bands"].items():
             print(f"  bands {run['id']} {qid}: cuts {b['cuts']} ({b['method']}, {b['reference']} reference topics)")

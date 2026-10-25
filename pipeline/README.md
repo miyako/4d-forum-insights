@@ -10,7 +10,10 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `scrape.py` | `store_raw()` only moves `raw_changed_at` when the thread text really changed |
 | `enrich.py`, `classify.py` | `--stale` (redo topics whose input changed) and `--budget-minutes` (time-boxed CI runs) |
 | `enrich.py` (port of upstream `8381102`) | summary schema `minLength`/`maxLength` (line 30–400, paragraph 80–1500 chars); `summarise()` retries up to 4 times with temperature +0.25 per attempt on JSON errors or short fields and keeps the longest result; `--resummarise-empty` backfills missing/short summaries from the stored English text; rewriting a summary deletes the topic's non-`:original` classifications so `classify` redoes them. Unlike upstream, the backfill also honours `--budget-minutes` |
+| `enrich.py` (`LLM.chat`) | JSON-schema requests ban gemma-4's thinking channel (`logit_bias` on `<\|channel>`, no `chat_template_kwargs`); upstream gets empty replies on some topics (11750, 13580). See `../docs/tips.md` |
 | `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
+| `kb.py` (new) | `fminer kb-classify` / `kb-write` / `kb-stats`: the `/tips/` knowledge base (see `../docs/tips.md`) |
+| `ci/run-kb.sh` (new) | runs kb-classify then kb-write, one llama-server at a time (18080 / 18081) |
 | `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
 
 **Keep `classify.QUESTIONS` identical to upstream**: the prompt version stored with every classification is a
@@ -70,5 +73,8 @@ uv run fminer stats
   Bucket cut-offs are the nearest level of the expected score (≥3.5 most likely, ≥2.5 likely, …).
 - 16 GB Macs can't hold gemma-4-E4B Q8 and Kev-4B Q8 at once without heavy swapping (generation drops to
   ~1 tok/s), so `pipeline.sh` runs the two servers one after the other.
+- Start gemma with `--cache-ram 0`. llama-server's host prompt cache defaults to 8 GiB. Every enrich or
+  kb-write prompt is a different thread, so the cache never gets a hit, but it fills within minutes and
+  pushes a 16 GB machine into swap. `ci/run-delta.sh` and `ci/run-kb.sh` pass it by default.
 - Early model comparison (FR category vs. rest, small sample): Kev-4B AUC ≈ 0.98–0.99; Julia-1 on
   untranslated text ≈ 0.55 (unusable for this task).

@@ -1,0 +1,61 @@
+/* /tips/: knowledge-base page. Reuses style.css (variables, header, toolbar, chips) and adds a single reading column. */
+.tips-logo { background: var(--ok); }
+
+.areas, .tips-main { max-width: 980px; margin-left: auto; margin-right: auto; }
+.areas { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 20px 0; }
+.area {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 999px; padding: 5px 12px; cursor: pointer;
+}
+.area:hover { border-color: var(--accent); }
+.area .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.area.zero { color: var(--muted); }
+.area.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.area.active .n { color: inherit; opacity: .85; }
+
+.tips-presets { padding: 0 0 8px; font-size: 13px; }
+.tips-presets .preset { padding: 2px 10px; }
+.tips-main { padding: 12px 20px 30px; }
+.tips-toolbar .toolbar-right { flex-wrap: wrap; }
+.types { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.type { border: 0; background: var(--panel); padding: 5px 10px; cursor: pointer; color: var(--muted); }
+.type + .type { border-left: 1px solid var(--line); }
+.type .n { font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
+.type.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+.tip-card {
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: var(--radius);
+  padding: 12px 16px 8px; margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.tip-card.type-solved { border-left-color: var(--ok); }
+.tip-card.type-tip { border-left-color: var(--accent); }
+.tip-card.type-open { border-left-color: var(--lv2t); }
+.tip-head { display: flex; align-items: baseline; gap: 10px; }
+.tip-title { font-size: 16px; line-height: 1.35; margin: 0; font-weight: 650; }
+.tip-title a { color: var(--text); }
+.tip-title a:hover { color: var(--accent); }
+.badge { flex: none; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: 5px; background: var(--lv0); color: var(--lv0t); }
+.badge-solved { background: color-mix(in srgb, var(--ok) 16%, var(--panel)); color: var(--ok); }
+.badge-tip { background: var(--accent-soft); color: var(--accent); }
+.badge-open { background: var(--lv2); color: var(--lv2t); }
+.tip-body { margin: 6px 0 8px; line-height: 1.55; color: color-mix(in srgb, var(--text) 90%, var(--muted)); }
+.tip-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 6px; }
+.tip-meta .meta { flex: 1; min-width: 200px; }
+.area-chip { text-decoration: none; }
+.area-chip:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+.orig-title { font-style: italic; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-link { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.why { margin-top: 6px; font-size: 12.5px; }
+.why > summary { cursor: pointer; color: var(--muted); width: max-content; }
+.why > summary:hover { color: var(--accent); }
+.why-body { padding: 8px 0 4px; }
+.why-body p { margin: 8px 0 0; }
+
+@media (max-width: 760px) {
+  .areas { padding: 10px 12px 0; }
+  .tips-main { padding: 10px 12px 24px; }
+  .btn.switch { margin-left: auto; }
+  .types { width: 100%; }
+  .type { flex: 1; padding: 6px 4px; }
+  .orig-title { max-width: 100%; }
+}
