@@ -194,14 +194,19 @@ def candidates(con, min_participants=MIN_PARTICIPANTS, min_returning=MIN_RETURNI
     return out
 
 
+def classify_todo(con, model_id, stale=False, min_participants=MIN_PARTICIPANTS, min_returning=MIN_RETURNING):
+    """Candidate threads without a current Voices rating by model_id (stale: or one older than the enrichment)."""
+    newer = "AND c.created_at >= COALESCE(t.enriched_at, '')" if stale else ""
+    return candidates(con, min_participants, min_returning, extra=f"""AND NOT EXISTS (
+        SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model='{model_id.replace("'", "''")}'
+        AND c.prompt_version='{PROMPT_VERSION}' {newer})""")
+
+
 def classify(con, base_url, model, workers=4, limit=None, sample=None, seed=7, stale=False, budget_minutes=None,
              min_participants=MIN_PARTICIPANTS, min_returning=MIN_RETURNING, log=print):
     decider = VoicesDecider(base_url, model)
     model_id = decider.model_id()
-    newer = "AND c.created_at >= COALESCE(t.enriched_at, '')" if stale else ""
-    rows = candidates(con, min_participants, min_returning, extra=f"""AND NOT EXISTS (
-        SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model='{model_id.replace("'", "''")}'
-        AND c.prompt_version='{PROMPT_VERSION}' {newer})""")
+    rows = classify_todo(con, model_id, stale, min_participants, min_returning)
     if sample:
         rows = random.Random(seed).sample(rows, min(sample, len(rows)))
     if limit:
@@ -453,10 +458,8 @@ def write_one(llm, row):
     return best
 
 
-def write(con, base_url, model, workers=4, limit=None, redo=False, budget_minutes=None, log=print):
-    """Write-ups for the selected threads (latest current-version Voices classification)."""
-    llm = LLM(base_url, model)
-    model_id = llm.model_id()
+def write_todo(con, redo=False):
+    """Selected threads (latest current-version rating) without a current write-up."""
     rows = con.execute(
         """SELECT t.id, t.title, t.title_en, t.first_post_en, t.thread_raw, t.summary_paragraph, c.answers,
                   c.created_at AS rated_at, v.created_at AS written_at, v.prompt_version AS written_version,
@@ -471,6 +474,14 @@ def write(con, base_url, model, workers=4, limit=None, redo=False, budget_minute
     todo = [r for r in best.values() if selected(json.loads(r["answers"])) and (
         redo or not r["written"] or r["written_version"] != WRITE_VERSION or r["written_at"] < r["rated_at"])]
     todo.sort(key=lambda r: -r["id"])
+    return todo
+
+
+def write(con, base_url, model, workers=4, limit=None, redo=False, budget_minutes=None, log=print):
+    """Write-ups for the selected threads (latest current-version Voices classification)."""
+    llm = LLM(base_url, model)
+    model_id = llm.model_id()
+    todo = write_todo(con, redo)
     if limit:
         todo = todo[:limit]
     log(f"[voices-write] {len(todo)} threads with {model_id} ({WRITE_VERSION})")

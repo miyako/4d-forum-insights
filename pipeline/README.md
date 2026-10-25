@@ -15,7 +15,7 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `kb.py` (new) | `fminer kb-classify` / `kb-write` / `kb-stats`: the `/tips/` knowledge base (see `../docs/tips.md`) |
 | `voices.py` (new) | `fminer voices-classify` / `voices-write` / `voices-stats`: lively threads for `/voices/` (see `../docs/voices.md`) |
 | `ci/run-kb.sh` (new) | runs kb-classify then kb-write, one llama-server at a time (18080 / 18081) |
-| `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
+| `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml`: fetch, enrich, classify, then the Tips and Voices classify + write steps (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
 
 **Keep `classify.QUESTIONS` identical to upstream**: the prompt version stored with every classification is a
 hash of it, so any difference starts a new run instead of extending the existing one.

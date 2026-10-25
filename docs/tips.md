@@ -83,7 +83,9 @@ make data DB=build/work.db && make embeddings && make publish
 - `make kb` is incremental:
   - `kb-classify --stale` redoes topics that were re-enriched after the delta workflow saw new replies.
   - `kb-write` redoes topics whose classification is newer than their entry.
-- So rerunning it after each delta run keeps the knowledge base current.
+- The weekly delta workflow runs the same two steps (time-boxed, after the main classify), so the knowledge base
+  stays current on its own. Run `make kb` locally only for a backlog, e.g. after a prompt change.
+- The export only publishes an entry while its type (solved/tip) still matches the topic's latest rating.
 - **Don't run it while the delta workflow is running.** Both push the same encrypted DB, and the last push wins.
 
 Useful environment variables for `run-kb.sh` / `make kb`:

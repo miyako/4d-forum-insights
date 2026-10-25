@@ -275,9 +275,15 @@ def build_tips(con, topic_ids, cfg, out):
         return None
     has_entries = con.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kb_entries'").fetchone() is not None
+    # only entries whose type still matches the topic's latest rating (a delta can re-rate a topic)
     rows = con.execute(
-        """SELECT topic_id, mode, headline, body, answered, problems FROM kb_entries
-           WHERE headline IS NOT NULL ORDER BY topic_id""").fetchall() if has_entries else []
+        """WITH x AS (
+               SELECT topic_id, json_extract(answers, '$.qa.choice') AS mode,
+                      ROW_NUMBER() OVER (PARTITION BY topic_id ORDER BY created_at DESC) AS rn
+               FROM classifications WHERE prompt_version LIKE 'tips-%')
+           SELECT k.topic_id, k.mode, k.headline, k.body, k.answered, k.problems
+           FROM kb_entries k JOIN x ON x.topic_id = k.topic_id AND x.rn = 1 AND x.mode = k.mode
+           WHERE k.headline IS NOT NULL ORDER BY k.topic_id""").fetchall() if has_entries else []
     rows = [r for r in rows if r["topic_id"] in topic_ids]
     modes = sorted({r["mode"] for r in rows})
     entries = {

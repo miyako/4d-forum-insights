@@ -132,7 +132,7 @@ The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot r
 
 ## Delta updates
 
-`.github/workflows/delta.yml` runs every Monday and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models, and a full re-list). The steps are:
+`.github/workflows/delta.yml` runs every Monday at 03:17 UTC (12:17 JST) and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models or only the Tips/Voices steps, and a full re-list). It updates all three views: the main index, `/tips/` and `/voices/`. The steps are:
 
 1. **Pull** the working DB, an encrypted release asset (see below).
 2. **Fetch the delta** with `fminer delta`, using the same polite `4d` User-Agent as the scraper. It checks `robots.txt` before fetching (`User-agent: 4d` is allow-listed) and throttles to about 1 request per second.
@@ -143,7 +143,9 @@ The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot r
      - Only a real change moves the new `raw_changed_at` column, which marks the topic for re-enrichment.
    - In the first week of each month it also re-lists every topic (`--full-list`) to refresh votes, views and likes.
 3. **Enrich** new and changed topics with gemma-4-E4B, **backfill** missing or short summaries with the same model (`fminer enrich --resummarise-empty`, which also drops those topics' classifications), then **classify** with Kev-4B (`--stale` redoes topics whose input or summary changed).
-   - All model steps are time-boxed (`--budget-minutes`, 180 + 90 by default; enrich and the backfill share the 180) and resumable, so a backlog spreads over several runs.
+   - With the same Kev server, **Tips** (`kb-classify --stale`) and **Voices** (`voices-classify --stale`) rate new and changed topics.
+   - gemma then starts again to **write** the new Tips entries (`kb-write`) and Voices write-ups (`voices-write`).
+   - All model steps are time-boxed (`--budget-minutes`) and resumable, so a backlog spreads over several runs. The defaults are 180 min for enrich + backfill, 90 for classify, 45 for the Tips + Voices classify steps and 60 for the Tips + Voices write steps. `DEADLINE` (300 min) caps the whole step, so the later steps shrink or are skipped when the earlier ones run long; the main index always goes first.
 4. **Save** the DB. This runs even if a later step fails, so progress is never lost.
 5. **Export** with `make data`, **embed** only the new or changed topics (the previous `site-data.tar.gz` is the cache), upload `site-data.tar.gz`, and **deploy** Pages.
 
@@ -151,11 +153,12 @@ The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot r
 
 There is no GPU, so the models run on the CPU of a standard `ubuntu-latest` runner, which for public repositories has 4 vCPU, 16 GB RAM and about 14 GB free disk (after the workflow deletes unused toolchains). It uses a prebuilt llama.cpp release (`llama-bNNNN-bin-ubuntu-x64.tar.gz`), which includes `--spec-type draft-mtp` and the `/v1/systemone` endpoint, so no compile step is needed.
 
-- The models run **one after the other**, and each is deleted after use: gemma Q8 is 7.6 GB and Kev-4B Q8 is 4.2 GB, and both together would not fit on the disk.
+- The models run **one after the other**, and each is deleted after use: gemma Q8 is 7.6 GB and Kev-4B Q8 is 4.2 GB, and both together would not fit on the disk. gemma is downloaded a second time for the write steps, only when there is something to write.
 - **macOS runners** (arm64, Metal) were ruled out: they have 7 GB RAM, too little for gemma-4-E4B Q8.
 - **Throughput estimate** on 4 vCPU:
   - enrich: about 1.5–3 minutes per topic (translation and two summaries of the thread)
-  - classify: about 10–30 seconds per topic
+  - classify: about 10–30 seconds per topic (Tips the same; Voices rates only busy threads, a few a week, with longer input)
+  - Tips / Voices write: about 1–3 minutes per entry; only solved/tip topics and selected discussions get one
   - the forum's normal delta is about 30 topics a week (126 bumped in the last 28 days), so this fits comfortably in a 6-hour job
   - the budgets stop starting new work after 180 + 90 minutes, and the job times out at 345 minutes
 - A long backlog, such as the first catch-up or a full re-run after a prompt change, is better done locally.
@@ -185,7 +188,7 @@ If CPU runs are too slow, or there is a backlog, run the same delta locally and 
 ```sh
 export DB_KEY="$(security find-generic-password -s 4d-forum-insights-DB_KEY -w)"   # same passphrase as the secret
 make db-pull                                       # → build/work.db
-LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + enrich + summary backfill + classify
+LLAMA_SERVER=~/llama.cpp/build/bin/llama-server make delta-local   # fetch + all model steps (main, Tips, Voices)
 make db-push                                       # save the DB for the next Actions run
 make snapshot data embeddings FMINER_DB_SRC=build/work.db && make publish
 ```
