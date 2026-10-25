@@ -13,6 +13,9 @@ from .enrich import clean, _CODE_BLOCK
 from .scrape import now
 
 MAX_STATE_CHARS = 6000
+# A request longer than a server slot's context (-c / -np) is rejected with HTTP 400. The post is then cut to
+# these fractions of MAX_STATE_CHARS; the thread summary keeps the gist of what is cut.
+SHRINK = (1.0, 0.6, 0.35)
 
 LEVELS = [
     "most unlikely feature request",
@@ -55,11 +58,11 @@ QUESTIONS = {
 PROMPT_VERSION = "v2-" + hashlib.sha1(json.dumps(QUESTIONS, sort_keys=True).encode()).hexdigest()[:8]
 
 
-def build_state(row, original=False):
+def build_state(row, original=False, max_chars=MAX_STATE_CHARS):
     if original:
-        title, body = row["title"], clean(row["first_post_raw"], MAX_STATE_CHARS)
+        title, body = row["title"], clean(row["first_post_raw"], max_chars)
     else:
-        title, body = row["title_en"], clean(row["first_post_en"], MAX_STATE_CHARS)
+        title, body = row["title_en"], clean(row["first_post_en"], max_chars)
     body = _CODE_BLOCK.sub("[code snippet]", body)
     state = f"Forum post title: {title}\n\nForum post:\n{body}"
     if not original and row["summary_paragraph"]:
@@ -88,6 +91,19 @@ class Decider:
             time.sleep(2 * (attempt + 1))
         r.raise_for_status()
         return r.json()
+
+    def ask_fitting(self, build):
+        """Ask with build(max_chars) -> state, shortening the post while the request exceeds the context."""
+        for i, f in enumerate(SHRINK):
+            try:
+                return self.ask(build(int(MAX_STATE_CHARS * f)))
+            except httpx.HTTPStatusError as e:
+                if i == len(SHRINK) - 1 or not context_exceeded(e.response):
+                    raise
+
+
+def context_exceeded(r):
+    return r.status_code == 400 and "exceeds the available context size" in r.text
 
 
 def run(con, base_url, model, workers=4, limit=None, sample=None, original=False, stale=False,
@@ -120,7 +136,7 @@ def run(con, base_url, model, workers=4, limit=None, sample=None, original=False
         if deadline and time.monotonic() > deadline:
             return row, None, "budget"
         try:
-            return row, decider.ask(build_state(row, original)), None
+            return row, decider.ask_fitting(lambda n: build_state(row, original, n)), None
         except Exception as e:
             return row, None, repr(e)
 
