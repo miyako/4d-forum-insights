@@ -48,6 +48,19 @@ If a request is too long for the server slot, `ask_fitting` retries with a short
   `settled` is mostly unresolved or consensus.
 - **Projected size:** about 17% of candidates are views or news, so about 315 threads.
 
+## Full run (2026-10-25/26, M1 Pro 16 GB)
+
+- **voices-classify:** 1,840 candidates in 3 h 12 min (9.5/min, Kev, 4 slots), no errors. `exchange`: help
+  1,509, views 292, news 33, social 6. `settled`: consensus 808, unresolved 704, none 256, decided 72.
+- **Selected:** 277 threads (views or news, debate ≥ 0.75). About 36 of the top 40 are real debates: "Please
+  let 0 be falsy", the 4D price increase, "I hate markdown", the Volaris acquisition threads, ORDA vs classic
+  speed, a built-in MCP server, "Where are we going 4D?", a `return` keyword, the new documentation style,
+  4D on Linux, AI-assisted coding. The rest are bug threads with an argument in them.
+- **voices-write:** 277 write-ups in 36 min (gemma, 4 slots), no errors. All passed the format and no-names
+  checks on the first or a retried attempt, and a manual scan of the capitalised words found only product and
+  technology names. The writer never answered `discussion: false`, so the selection rests on Kev.
+- **Published:** 277 discussions, 212 KB (`voices/entries.json`).
+
 ## Write-ups (`fminer voices-write`)
 
 Selected threads (`exchange` is views or news, and `debate` ≥ 0.75, i.e. at least "minor differences") get a
