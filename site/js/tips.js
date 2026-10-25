@@ -170,8 +170,8 @@ function renderStatic() {
     + Array.from({ length: hi - lo + 1 }, (_, i) => hi - i).map((y) => `<option value="${y}">${y}+</option>`).join('');
   $('#presets').innerHTML = '<span class="muted">Try:</span> ' + (app.tips.presets || []).map((p) =>
     `<a class="preset" href="?${esc(p.params)}" data-params="${esc(p.params)}">${esc(p.label)}</a>`).join('');
-  const cover = app.run.count < m.stats.enriched
-    ? ` <strong>Pilot:</strong> ${num.format(app.run.count)} of ${num.format(m.stats.enriched)} topics classified so far.` : '';
+  const cover = app.run.count < 0.98 * m.stats.enriched
+    ? ` <strong>Partial:</strong> ${num.format(app.run.count)} of ${num.format(m.stats.enriched)} topics classified so far.` : '';
   $('#footer').innerHTML = `
     <p>${esc(app.tips.description)}${cover}</p>
     <p>${num.format(app.tips.entries)} knowledge-base entries written by a local model; area and type by
