@@ -13,7 +13,7 @@ The original is never modified from here. Changes made in this copy (all marked 
 | `enrich.py` (`LLM.chat`) | JSON-schema requests ban gemma-4's thinking channel (`logit_bias` on `<\|channel>`, no `chat_template_kwargs`); upstream gets empty replies on some topics (11750, 13580). See `../docs/tips.md` |
 | `delta.py` (new) | `fminer delta`: robots.txt check, `/latest.json` walk, raw fetch, edit sweep |
 | `kb.py` (new) | `fminer kb-classify` / `kb-write` / `kb-stats`: the `/tips/` knowledge base (see `../docs/tips.md`) |
-| `voices.py` (new, in progress) | `fminer voices-classify` / `voices-stats`: lively threads for `/voices/` (see `../docs/voices.md`) |
+| `voices.py` (new) | `fminer voices-classify` / `voices-write` / `voices-stats`: lively threads for `/voices/` (see `../docs/voices.md`) |
 | `ci/run-kb.sh` (new) | runs kb-classify then kb-write, one llama-server at a time (18080 / 18081) |
 | `ci/run-delta.sh` (new) | the end-to-end delta used by `.github/workflows/delta.yml` (its llama-servers listen on 18081 / 18080, so a local run never collides with the upstream pipeline on 8081 / 8080) |
 

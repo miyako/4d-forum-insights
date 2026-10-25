@@ -90,6 +90,13 @@ def main() -> None:
     p.add_argument("--min-returning", type=int, default=2,
                    help="candidates need at least N participants posting 3 times or more")
     p.add_argument("--budget-minutes", type=float)
+    p = sub.add_parser("voices-write", help="voices: neutral anonymous write-ups of the selected threads (chat API)")
+    p.add_argument("--base-url", default="http://127.0.0.1:8081/v1")
+    p.add_argument("--model", default="")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--limit", type=int)
+    p.add_argument("--redo", action="store_true")
+    p.add_argument("--budget-minutes", type=float)
     p = sub.add_parser("voices-stats", help="voices: show progress")
     p.add_argument("--top", type=int, default=0, help="also list the N threads with the highest debate score")
 
@@ -140,11 +147,16 @@ def main() -> None:
         kb.stats(con)
     elif a.cmd.startswith("voices-"):
         from . import voices
-        if a.cmd == "voices-classify":
+        con = voices.connect()
+        if a.cmd == "voices-write":
+            voices.write(con, a.base_url, a.model, workers=a.workers, limit=a.limit, redo=a.redo,
+                         budget_minutes=a.budget_minutes)
+        elif a.cmd == "voices-classify":
             voices.classify(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample,
                             stale=a.stale, budget_minutes=a.budget_minutes, min_participants=a.min_participants,
                             min_returning=a.min_returning)
         voices.stats(con, top=getattr(a, "top", 0))
+        voices.write_stats(con)
     elif a.cmd == "index":
         db.rebuild_fts(con)
     elif a.cmd == "stats":

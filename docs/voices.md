@@ -1,10 +1,8 @@
-# Forum Voices (in progress)
+# Forum Voices
 
-`/voices/` will list forum threads where the community weighed in. For each thread it will show the question
-at stake, the views that came up and how the discussion ended. Like Forum Tips, it is built from public threads
-and links to each one. It never shows usernames or post text.
-
-Status: the decision-model step is implemented and piloted. Next come the write-ups (gemma) and the page.
+`/voices/` lists forum threads where the community weighed in. For each thread it shows the question at stake,
+the views that came up and how the discussion ended. Like Forum Tips, it is built from public threads and links
+to each one. It never shows usernames or post text.
 
 ## Selection
 
@@ -50,7 +48,49 @@ If a request is too long for the server slot, `ask_fitting` retries with a short
   `settled` is mostly unresolved or consensus.
 - **Projected size:** about 17% of candidates are views or news, so about 315 threads.
 
+## Write-ups (`fminer voices-write`)
+
+Selected threads (`exchange` is views or news, and `debate` ≥ 0.75, i.e. at least "minor differences") get a
+write-up from gemma-4-E4B (chat API, JSON schema), stored in `voices_entries`:
+
+- `question`: the issue, as one neutral question;
+- `positions`: the 2–4 main views, one sentence each, unattributed ("Some participants argue…");
+- `outcome`: how it ended (a shared view, an answer from 4D, or still divided);
+- `discussion`: the writer's own check; `false` means there was no real exchange of views (hidden on the page
+  unless `all=1`).
+
+Gemma sees the same anonymised thread as Kev (letters instead of usernames, @mentions replaced) with longer
+replies, and sign-offs ("Regards, Chuck", a last line with just a name) removed.
+
+**No-names check.** Every write-up is checked against the thread's usernames (and their parts:
+`Bruno.Smith` → bruno, smith) and the names found in sign-offs. A write-up that contains one, or refers to
+participants by letter, is retried (up to 4 attempts, rising temperature); if every attempt fails, the entry is
+stored with `problems: ["names"]` and **never exported**. The check cannot know every first name mentioned in
+passing, so each card links to a removal request.
+
+## Published data
+
+`scripts/build_data.py` writes `site/data/voices/entries.json` (columnar) and `manifest.voices` (title, run,
+question labels from `config/voices.json`, presets, removal link). Only selected threads with a publishable
+write-up are exported, with: the rank, the debate level, kind, outcome and subject (with probabilities), the
+number of participants, of returning participants and of days, and the write-up. `heated` is not exported.
+
+## The page
+
+`/voices/` reuses the Tips layout: keyword, hybrid and semantic search (the same topic embeddings), subject
+chips, outcome filter, year, and sorting by liveliness (rank), date, participants or views. Each card shows the
+outcome badge, the question, the views, the outcome, the subject, the debate level and the counts, and links to
+the thread. "About this summary" shows the model ratings and a removal-request link.
+
 ## Run it
+
+```bash
+make voices KB_DB=build/work.db                 # both steps, one llama-server at a time (pipeline/ci/run-voices.sh)
+make voices-stats KB_DB=build/work.db
+make data DB=build/work.db && make serve        # then open /voices/
+```
+
+By hand:
 
 ```bash
 make snapshot                                   # or use the working DB: FMINER_DB=build/work.db
@@ -59,18 +99,14 @@ cd pipeline
 llama-server -hf ggml-org/Kev-4B-GGUF:Q8_0 -c 16384 -np 4 -fa on --port 18080 &
 FMINER_DB=../build/work.db uv run fminer voices-classify --base-url http://127.0.0.1:18080 [--sample 300]
 FMINER_DB=../build/work.db uv run fminer voices-stats --top 50
+# then stop Kev and start gemma (see run-voices.sh for its arguments) on :18081
+FMINER_DB=../build/work.db uv run fminer voices-write --base-url http://127.0.0.1:18081/v1
 ```
 
 All 1,840 candidates take about 3.3 hours. `--budget-minutes` makes the run time-boxed, and the run resumes
 where it stopped.
 
-## Next
+## Updates
 
-1. **`voices-write` (gemma, about 315 threads, about 20 min).** It writes the question at stake, 2–4 positions
-   in neutral, unattributed language ("Some argued…, others…") and the outcome, in about 80–120 words. Each
-   write-up is checked automatically: it is rejected if it contains any participant's username, or a name
-   from a signature, and the model then retries.
-2. **`/voices/` page ("Forum Voices").** It reuses the tips UI, with filters for subject and settled, sorting
-   by range of views, participants or recency, and a cross-link when a thread is also a feature request. The
-   footer has a link to request removal (GitHub issues).
-3. **Delta.** `voices-classify --stale` re-rates threads when they are bumped.
+After a delta (new replies re-enrich a thread), `make voices` re-rates changed candidates (`--stale`), rates new
+candidates, and rewrites the write-ups whose rating is newer.
