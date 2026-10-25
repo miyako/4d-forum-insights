@@ -28,6 +28,7 @@ Main features:
 - **Shareable URLs**: the whole search state (query, mode, filters, sort, run, view, open topic) is kept in the query string.
 - **Card and table views**, and a mobile layout.
 - **Tips** (`/tips/`): a knowledge base of answered questions and shared know-how, rewritten by a local model into short question + answer entries, by area (Language, Interface, Database, Web & network, Administration, 4D Write Pro, 4D View Pro, Third party, Other), with keyword, semantic and hybrid search. See [docs/tips.md](docs/tips.md).
+- **Voices** (`/voices/`, in progress): threads where the community weighed in, with the question at stake, the views that came up and how it ended. No usernames are shown. See [docs/voices.md](docs/voices.md).
 - **Light, dark or Auto theme**. Auto follows the OS and is the default. The choice is kept in localStorage and applied before first paint, so the page never flashes the wrong theme.
 
 Only titles, machine-translated titles, model-written summaries, metadata, model answers and links are published.

@@ -84,8 +84,15 @@ def upstream_questions(module="classify"):
         return {}
 
 
+SIDE_RUNS = ("tips-", "voices-")  # side views with their own pages; never main-page runs
+
+
 def is_tips_run(version):
     return (version or "").startswith("tips-")
+
+
+def is_main_run(version):
+    return not (version or "").startswith(SIDE_RUNS)
 
 
 def strip_markup(text, limit):
@@ -170,7 +177,8 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, f
     for r in con.execute("SELECT model, prompt_version, COUNT(*) n, MAX(created_at) last FROM classifications "
                          "GROUP BY 1,2 ORDER BY n DESC").fetchall():
         model, version = r["model"], r["prompt_version"]
-        if model in hidden or f"{model}/{version}" in hidden or is_tips_run(version) != tips:
+        wanted = is_tips_run(version) if tips else is_main_run(version)
+        if model in hidden or f"{model}/{version}" in hidden or not wanted:
             continue
         rows = con.execute(
             "SELECT * FROM classifications WHERE model=? AND prompt_version=? ORDER BY topic_id",
@@ -390,7 +398,7 @@ def main():
         "stats": {
             "topics": len(rows),
             "enriched": sum(1 for r in rows if r["enriched_at"]),
-            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications WHERE prompt_version NOT LIKE 'tips-%'"),
+            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications WHERE prompt_version NOT LIKE 'tips-%' AND prompt_version NOT LIKE 'voices-%'"),
             "last_topic": max((r["created_at"] for r in rows if r["created_at"]), default=None),
             "last_fetch": q1("SELECT MAX(raw_fetched_at) FROM topics"),
         },
@@ -416,7 +424,7 @@ def main():
     write_json(out, "manifest.json", manifest)
 
     classified = {r[0] for r in con.execute(
-        "SELECT DISTINCT topic_id FROM classifications WHERE prompt_version NOT LIKE 'tips-%'")}
+        "SELECT DISTINCT topic_id FROM classifications WHERE prompt_version NOT LIKE 'tips-%' AND prompt_version NOT LIKE 'voices-%'")}
     for e in embed:
         e["c"] = int(e["id"] in classified)
     ep = Path(a.embed_input)

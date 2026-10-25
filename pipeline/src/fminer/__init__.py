@@ -78,6 +78,21 @@ def main() -> None:
 
     sub.add_parser("kb-stats", help="tips: show progress")
 
+    # vendored copy: Forum Voices, see voices.py
+    p = sub.add_parser("voices-classify", help="voices: rate lively threads (debate, settled, subject, heated)")
+    p.add_argument("--base-url", default="http://127.0.0.1:8080")
+    p.add_argument("--model", default="")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--limit", type=int)
+    p.add_argument("--sample", type=int, help="classify a random sample of N candidate threads")
+    p.add_argument("--stale", action="store_true", help="also redo threads re-enriched since they were classified")
+    p.add_argument("--min-participants", type=int, default=5)
+    p.add_argument("--min-returning", type=int, default=2,
+                   help="candidates need at least N participants posting 3 times or more")
+    p.add_argument("--budget-minutes", type=float)
+    p = sub.add_parser("voices-stats", help="voices: show progress")
+    p.add_argument("--top", type=int, default=0, help="also list the N threads with the highest debate score")
+
     sub.add_parser("index", help="rebuild the full-text index")
     sub.add_parser("stats", help="show progress")
 
@@ -123,6 +138,13 @@ def main() -> None:
             kb.write(con, a.base_url, a.model, workers=a.workers, limit=a.limit, min_p=a.min_p, redo=a.redo,
                      budget_minutes=a.budget_minutes)
         kb.stats(con)
+    elif a.cmd.startswith("voices-"):
+        from . import voices
+        if a.cmd == "voices-classify":
+            voices.classify(con, a.base_url, a.model, workers=a.workers, limit=a.limit, sample=a.sample,
+                            stale=a.stale, budget_minutes=a.budget_minutes, min_participants=a.min_participants,
+                            min_returning=a.min_returning)
+        voices.stats(con, top=getattr(a, "top", 0))
     elif a.cmd == "index":
         db.rebuild_fts(con)
     elif a.cmd == "stats":
