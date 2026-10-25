@@ -10,6 +10,8 @@ than at the live database of a running pipeline. Writes into ``--out`` (default 
   answers/<run>.json   per model run: compact model answers for every classified topic
   tips/entries.json    knowledge-base entries (generated question/headline + answer) for the /tips/ page;
                        the "tips-…" runs (topic area, Q&A kind) are listed under manifest.tips, not manifest.runs
+  voices/entries.json  Forum Voices (/voices/): the selected discussions with their ratings and anonymous write-ups
+                       (manifest.voices); the internal "heated" rating and any write-up naming someone are left out
 
 and ``build/embed-input.jsonl`` (NOT published) for ``scripts/build_embeddings.mjs``.
 
@@ -84,8 +86,15 @@ def upstream_questions(module="classify"):
         return {}
 
 
+SIDE_RUNS = ("tips-", "voices-")  # side views with their own pages; never main-page runs
+
+
 def is_tips_run(version):
     return (version or "").startswith("tips-")
+
+
+def is_main_run(version):
+    return not (version or "").startswith(SIDE_RUNS)
 
 
 def strip_markup(text, limit):
@@ -170,7 +179,8 @@ def build_runs(con, topic_ids, cfg_site, cfg_q, upstream, out, topic_cat=None, f
     for r in con.execute("SELECT model, prompt_version, COUNT(*) n, MAX(created_at) last FROM classifications "
                          "GROUP BY 1,2 ORDER BY n DESC").fetchall():
         model, version = r["model"], r["prompt_version"]
-        if model in hidden or f"{model}/{version}" in hidden or is_tips_run(version) != tips:
+        wanted = is_tips_run(version) if tips else is_main_run(version)
+        if model in hidden or f"{model}/{version}" in hidden or not wanted:
             continue
         rows = con.execute(
             "SELECT * FROM classifications WHERE model=? AND prompt_version=? ORDER BY topic_id",
@@ -293,6 +303,78 @@ def build_tips(con, topic_ids, cfg, out):
     }
 
 
+def build_voices(con, topic_ids, cfg, out):
+    """Forum Voices for /voices/: selected threads ("voices-…" run) with a publishable write-up (voices_entries)."""
+    try:
+        from fminer import voices
+        from fminer.scrape import split_raw
+    except Exception as e:  # pipeline package missing
+        print(f"  voices: skipped ({e})")
+        return None
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='voices_entries'").fetchone():
+        return None
+    runs = con.execute(
+        """SELECT model, COUNT(*) n, MAX(created_at) last FROM classifications WHERE prompt_version = ?
+           GROUP BY 1 ORDER BY n DESC""", (voices.PROMPT_VERSION,)).fetchall()
+    if not runs:
+        return None
+    model = runs[0]["model"]
+    rows = con.execute(
+        """SELECT c.topic_id, c.answers, t.thread_raw, v.question, v.positions, v.outcome, v.discussion, v.problems,
+                  v.prompt_version AS write_version
+           FROM classifications c JOIN topics t ON t.id = c.topic_id
+           JOIN voices_entries v ON v.topic_id = c.topic_id AND v.question IS NOT NULL
+           WHERE c.model = ? AND c.prompt_version = ? ORDER BY c.topic_id""",
+        (model, voices.PROMPT_VERSION)).fetchall()
+    keys = {q: list(voices.QUESTIONS[q]["criteria"]) for q in ("exchange", "settled", "subject")}
+    cols = {k: [] for k in ("ids", "rank", "debate", "exchange", "settled", "settled_p", "subject", "subject_p",
+                            "participants", "returning", "days", "question", "positions", "outcome", "ok")}
+    withheld = 0
+    for r in rows:
+        a = json.loads(r["answers"])
+        if r["topic_id"] not in topic_ids or not voices.selected(a):
+            continue
+        problems = json.loads(r["problems"] or "[]")
+        if "names" in problems or "letters" in problems:
+            withheld += 1
+            continue
+        st = voices.thread_stats(split_raw(r["thread_raw"] or ""))
+        cols["ids"].append(r["topic_id"])
+        cols["rank"].append(permille(voices.rank(a) / 4))
+        cols["debate"].append(permille(a["debate"]["score"] / 4))
+        for q in ("exchange", "settled", "subject"):
+            cols[q].append(keys[q].index(a[q]["choice"]))
+            if q != "exchange":
+                cols[f"{q}_p"].append(permille(a[q]["probabilities"].get(a[q]["choice"], 0)))
+        cols["participants"].append(st["participants"])
+        cols["returning"].append(st["returning"])
+        cols["days"].append(st["days"])
+        cols["question"].append(r["question"])
+        cols["positions"].append(json.loads(r["positions"] or "[]"))
+        cols["outcome"].append(r["outcome"])
+        # 1 = clean, 0 = the writer found no real exchange of views (hidden by default), 2 = minor flaw (length...)
+        cols["ok"].append(0 if r["discussion"] == 0 else 2 if problems else 1)
+    labels = cfg.get("questions", {})
+    questions = [{
+        "id": q, "label": labels.get(q, {}).get("label", q),
+        "choices": [{"key": k, "label": labels.get(q, {}).get("choices", {}).get(k, k),
+                     "long": voices.QUESTIONS[q]["criteria"][k]} for k in keys[q]],
+    } for q in ("settled", "subject", "exchange")]
+    return {
+        "title": cfg.get("title", "4D Forum Voices"),
+        "description": cfg.get("description", ""),
+        "removal_url": cfg.get("removal_url"),
+        "run": {"model": model, "prompt_version": voices.PROMPT_VERSION, "count": runs[0]["n"],
+                "write_version": voices.WRITE_VERSION, "updated": runs[0]["last"]},
+        "debate": cfg.get("debate") or voices.DEBATE,
+        "questions": questions,
+        "presets": cfg.get("presets", []),
+        "entries": len(cols["ids"]),
+        "withheld": withheld,
+        "files": {"entries": write_json(out, "voices/entries.json", cols)},
+    }
+
+
 # --------------------------------------------------------------------------- output helpers
 
 def write_json(out, rel, obj):
@@ -377,6 +459,7 @@ def main():
     topic_cat = {r["id"]: r["category_id"] for r in rows}
     runs, questions, default_run = build_runs(con, topic_ids, cfg_site, cfg_q, upstream_questions(), out, topic_cat, fr_cat)
     tips = build_tips(con, topic_ids, load_json(Path(a.config) / "tips.json", {}), out)
+    voices = build_voices(con, topic_ids, load_json(Path(a.config) / "voices.json", {}), out)
 
     # keep embeddings produced by an earlier build_embeddings run (it patches the manifest itself)
     prev = load_json(out / "manifest.json", {})
@@ -390,7 +473,7 @@ def main():
         "stats": {
             "topics": len(rows),
             "enriched": sum(1 for r in rows if r["enriched_at"]),
-            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications WHERE prompt_version NOT LIKE 'tips-%'"),
+            "classified": q1("SELECT COUNT(DISTINCT topic_id) FROM classifications WHERE prompt_version NOT LIKE 'tips-%' AND prompt_version NOT LIKE 'voices-%'"),
             "last_topic": max((r["created_at"] for r in rows if r["created_at"]), default=None),
             "last_fetch": q1("SELECT MAX(raw_fetched_at) FROM topics"),
         },
@@ -410,13 +493,14 @@ def main():
         "presets": cfg_site.get("presets", []),
         "files": {"topics": topics_file, "text": text_file},
         "tips": tips,
+        "voices": voices,
         "embeddings": prev.get("embeddings"),
         "embedding_config": cfg_site.get("embeddings"),
     }
     write_json(out, "manifest.json", manifest)
 
     classified = {r[0] for r in con.execute(
-        "SELECT DISTINCT topic_id FROM classifications WHERE prompt_version NOT LIKE 'tips-%'")}
+        "SELECT DISTINCT topic_id FROM classifications WHERE prompt_version NOT LIKE 'tips-%' AND prompt_version NOT LIKE 'voices-%'")}
     for e in embed:
         e["c"] = int(e["id"] in classified)
     ep = Path(a.embed_input)
@@ -430,6 +514,9 @@ def main():
           f"(default {default_run}), {len(questions)} questions, {len(tags)} tags")
     if tips:
         print(f"  tips: {len(tips['runs'])} runs, {tips['entries']} knowledge-base entries")
+    if voices:
+        print(f"  voices: {voices['run']['count']} threads rated, {voices['entries']} published write-ups "
+              f"({voices['withheld']} withheld)")
     for run in runs:
         for qid, b in run["bands"].items():
             print(f"  bands {run['id']} {qid}: cuts {b['cuts']} ({b['method']}, {b['reference']} reference topics)")

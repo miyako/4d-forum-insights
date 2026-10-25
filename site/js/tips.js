@@ -41,6 +41,7 @@ async function init() {
   app.tips = m.tips;
   if (!app.tips?.runs?.length) return fail('No knowledge-base data yet: run <code>fminer kb-classify</code> and <code>make data</code>.');
   document.title = app.tips.title;
+  $('#voices-link').hidden = !m.voices?.entries;
   app.state = parseTipsState(location.search);
 
   const run = app.tips.runs.find((r) => r.id === app.tips.default_run) || app.tips.runs[0];

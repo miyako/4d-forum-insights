@@ -71,6 +71,8 @@ def build_state(row, original=False, max_chars=MAX_STATE_CHARS):
 
 
 class Decider:
+    questions = None  # subclasses ask other questions; None = the feature-request QUESTIONS
+
     def __init__(self, base_url, model):
         self.http = httpx.Client(base_url=base_url, timeout=300)
         self.model = model
@@ -81,7 +83,7 @@ class Decider:
         return self.http.get("/v1/models").json()["data"][0]["id"]
 
     def ask(self, state):
-        body = {"state": state, "questions": QUESTIONS}
+        body = {"state": state, "questions": self.questions or QUESTIONS}
         if self.model:
             body["model"] = self.model
         for attempt in range(4):

@@ -4,6 +4,7 @@
 #   make serve        preview on http://127.0.0.1:8000
 #   make publish      upload site/data as a release asset and redeploy GitHub Pages
 #   make kb-pilot     knowledge base (/tips/) on a 300-topic sample in a copy of the DB (build/tips.db)
+#   make voices       Forum Voices (/voices/): rate lively threads, write anonymous summaries (resumable)
 #
 # The source DB is only ever read: `snapshot` copies it with sqlite's online .backup (read-only open).
 
@@ -17,7 +18,7 @@ KB_DB         ?= $(WORK_DB)
 KB_SAMPLE     ?= 300
 
 .PHONY: all snapshot data embeddings embeddings-sample vendor test serve site-data publish \
-        db-pull db-push db-seed delta-local kb kb-pilot kb-stats clean
+        db-pull db-push db-seed delta-local kb kb-pilot kb-stats voices voices-stats clean
 
 all: snapshot data embeddings
 
@@ -89,6 +90,13 @@ kb-pilot:
 	cd pipeline && FMINER_DB="$(abspath build/tips.db)" SAMPLE="$(KB_SAMPLE)" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-kb.sh
 kb-stats:
 	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" uv run -q fminer kb-stats
+
+## Forum Voices (/voices/): voices-classify (decision model), then voices-write (generative model); same DB and
+## rules as kb (see docs/voices.md)
+voices:
+	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-voices.sh
+voices-stats:
+	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" uv run -q fminer voices-stats --top 30
 
 ## run the delta (fetch + enrich + summary backfill + classify) locally against the working DB, e.g. on a Mac with Metal
 delta-local:

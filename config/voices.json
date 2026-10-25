@@ -1,0 +1,44 @@
+{
+  "_comment": "Display config for /voices/ (Forum Voices). Ratings come from the 'voices-…' classifications and write-ups from voices_entries (pipeline/src/fminer/voices.py). The 'heated' answer is internal and never exported.",
+  "title": "4D Forum Voices",
+  "description": "Discussions where the 4D community weighed in: the question, the main views and how it ended, summarised anonymously by a local model. Always read the original thread.",
+  "removal_url": "https://github.com/miyako/4d-forum-insights/issues/new?labels=voices-removal&title=Voices%3A%20please%20remove%20topic%20",
+  "debate": ["No disagreement", "Minor differences", "Some disagreement", "Clear debate", "Strong debate"],
+  "questions": {
+    "settled": {
+      "label": "Outcome",
+      "choices": {
+        "consensus": "Consensus",
+        "decided": "Answered by 4D",
+        "unresolved": "Still open",
+        "none": "Nothing to settle"
+      }
+    },
+    "subject": {
+      "label": "Subject",
+      "choices": {
+        "technical": "Technical",
+        "product": "Product direction",
+        "business": "Business & licensing",
+        "community": "Community"
+      }
+    },
+    "exchange": {
+      "label": "Kind",
+      "choices": {
+        "views": "Exchange of views",
+        "news": "Reactions to news",
+        "help": "Help",
+        "social": "Social"
+      }
+    }
+  },
+  "presets": [
+    {"id": "product", "label": "Product direction", "params": "subject=product"},
+    {"id": "business", "label": "Licensing & business", "params": "subject=business"},
+    {"id": "open", "label": "Still open", "params": "settled=unresolved"},
+    {"id": "4d", "label": "Answered by 4D", "params": "settled=decided"},
+    {"id": "orda", "label": "ORDA", "params": "q=orda"},
+    {"id": "language", "label": "Language", "params": "q=language syntax"}
+  ]
+}

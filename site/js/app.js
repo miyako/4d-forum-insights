@@ -206,6 +206,7 @@ function onModelProgress(p) {
 function renderStatic() {
   const m = app.manifest;
   $('#tips-link').hidden = !m.tips?.runs?.length;
+  $('#voices-link').hidden = !m.voices?.entries;
   const runSel = $('#run');
   runSel.innerHTML = m.runs.map((r) => `<option value="${esc(r.id)}">${esc(r.label)} — ${num.format(r.count)} topics${r.id === m.default_run ? ' (default)' : ''}</option>`).join('');
   runSel.disabled = m.runs.length < 2;
