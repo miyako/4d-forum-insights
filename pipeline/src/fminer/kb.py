@@ -85,8 +85,8 @@ def connect():
 
 # ------------------------------------------------------------------------------------------- classify
 
-def build_state(row):
-    body = _CODE_BLOCK.sub("[code snippet]", clean(row["first_post_en"], MAX_STATE_CHARS))
+def build_state(row, max_chars=MAX_STATE_CHARS):
+    body = _CODE_BLOCK.sub("[code snippet]", clean(row["first_post_en"], max_chars))
     state = f"Forum post title: {row['title_en']}\n\nForum post:\n{body}"
     replies = max(0, (row["posts_count"] or 1) - 1)
     state += f"\n\nThe thread has {replies} repl{'y' if replies == 1 else 'ies'}"
@@ -135,7 +135,7 @@ def classify(con, base_url, model, workers=4, limit=None, sample=None, seed=7, s
             (row["id"], model_id, PROMPT_VERSION, json.dumps(res["answers"]),
              res.get("usage", {}).get("input_tokens"), now()))
 
-    _pool(con, rows, lambda row: decider.ask(build_state(row)), save, workers, "kb-classify", log, budget_minutes)
+    _pool(con, rows, lambda row: decider.ask_fitting(lambda n: build_state(row, n)), save, workers, "kb-classify", log, budget_minutes)
 
 
 # ------------------------------------------------------------------------------------------- write

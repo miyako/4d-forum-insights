@@ -76,5 +76,9 @@ uv run fminer stats
 - Start gemma with `--cache-ram 0`. llama-server's host prompt cache defaults to 8 GiB. Every enrich or
   kb-write prompt is a different thread, so the cache never gets a hit, but it fills within minutes and
   pushes a 16 GB machine into swap. `ci/run-delta.sh` and `ci/run-kb.sh` pass it by default.
+- Each server slot gets `-c / -np` tokens of context (4,096 for Kev with `-c 16384` and 4 slots). When a
+  classify or kb-classify request is longer than that, the server rejects it with a 400 error. The request
+  is then retried with the post cut to 60% and then 35% of `MAX_STATE_CHARS`, and the thread summary is
+  still included.
 - Early model comparison (FR category vs. rest, small sample): Kev-4B AUC ≈ 0.98–0.99; Julia-1 on
   untranslated text ≈ 0.55 (unusable for this task).
