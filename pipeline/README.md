@@ -73,5 +73,8 @@ uv run fminer stats
   Bucket cut-offs are the nearest level of the expected score (≥3.5 most likely, ≥2.5 likely, …).
 - 16 GB Macs can't hold gemma-4-E4B Q8 and Kev-4B Q8 at once without heavy swapping (generation drops to
   ~1 tok/s), so `pipeline.sh` runs the two servers one after the other.
+- Start gemma with `--cache-ram 0`. llama-server's host prompt cache defaults to 8 GiB. Every enrich or
+  kb-write prompt is a different thread, so the cache never gets a hit, but it fills within minutes and
+  pushes a 16 GB machine into swap. `ci/run-delta.sh` and `ci/run-kb.sh` pass it by default.
 - Early model comparison (FR category vs. rest, small sample): Kev-4B AUC ≈ 0.98–0.99; Julia-1 on
   untranslated text ≈ 0.55 (unusable for this task).
