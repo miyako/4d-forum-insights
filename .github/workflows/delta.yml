@@ -1,5 +1,6 @@
-# Weekly incremental update:
-#   pull encrypted DB → fetch delta from discuss.4d.com → enrich + summary backfill (gemma-4-E4B) → classify (Kev-4B)
+# Weekly incremental update of all three views (main index, /tips/, /voices/):
+#   pull encrypted DB → fetch delta from discuss.4d.com → enrich + summary backfill (gemma-4-E4B)
+#   → classify + kb-classify + voices-classify (Kev-4B) → kb-write + voices-write (gemma-4-E4B)
 #   → export site data → embed new/changed topics → push DB + site data → deploy Pages
 #
 # Models run on the CPU of a standard ubuntu-latest runner (4 vCPU / 16 GB for public repos) with a
@@ -16,7 +17,11 @@ on:
   workflow_dispatch:
     inputs:
       skip_models:
-        description: 'Only fetch the delta (no enrich / classify)'
+        description: 'Only fetch the delta (no models at all)'
+        type: boolean
+        default: false
+      skip_side:
+        description: 'Skip the Tips and Voices model steps (main index only)'
         type: boolean
         default: false
       full_list:
@@ -32,6 +37,12 @@ on:
       classify_budget:
         description: 'Minutes for the classify step'
         default: '90'
+      side_budget:
+        description: 'Minutes for the Tips + Voices classify steps (shared)'
+        default: '45'
+      write_budget:
+        description: 'Minutes for the Tips + Voices write steps (shared)'
+        default: '60'
       llama_tag:
         description: 'llama.cpp release tag (default: newest bNNNN build)'
         default: ''
@@ -109,7 +120,7 @@ jobs:
           /opt/llama/llama-server --version
           echo "LLAMA_SERVER=/opt/llama/llama-server" >> "$GITHUB_ENV"
 
-      - name: Fetch delta, enrich, backfill summaries, classify
+      - name: Fetch delta, run the models (main, Tips, Voices)
         if: steps.pre.outputs.ok == 'true'
         env:
           FMINER_DB: ${{ github.workspace }}/build/work.db
@@ -117,6 +128,12 @@ jobs:
           SWEEP_WINDOW: ${{ inputs.sweep_window || '300' }}
           ENRICH_BUDGET: ${{ inputs.enrich_budget || '180' }}
           CLASSIFY_BUDGET: ${{ inputs.classify_budget || '90' }}
+          SIDE_BUDGET: ${{ inputs.side_budget || '45' }}
+          WRITE_BUDGET: ${{ inputs.write_budget || '60' }}
+          SKIP_SIDE: ${{ inputs.skip_side == true && '1' || '' }}
+          # minutes for this whole step (later model steps shrink or are skipped); the job times out at 345 and
+          # still needs ~25 min for setup, saving the DB, the export and the embeddings
+          DEADLINE: '300'
           FREE_MODEL_CACHE: '1'
           WORKERS: '2'
         run: |
@@ -164,7 +181,9 @@ jobs:
             echo '```'
             sqlite3 "$WORK_DB" "SELECT key, value FROM state WHERE key LIKE 'last_%';" || true
             sqlite3 "$WORK_DB" "SELECT 'topics', COUNT(*), 'enriched', COUNT(enriched_at) FROM topics;" || true
-            sqlite3 "$WORK_DB" "SELECT model, COUNT(*) FROM classifications GROUP BY model;" || true
+            sqlite3 "$WORK_DB" "SELECT model, prompt_version, COUNT(*) FROM classifications GROUP BY 1, 2;" || true
+            sqlite3 "$WORK_DB" "SELECT 'tips entries', COUNT(headline), 'errors', COUNT(error) FROM kb_entries;" || true
+            sqlite3 "$WORK_DB" "SELECT 'voices write-ups', COUNT(question), 'errors', COUNT(error) FROM voices_entries;" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -110,18 +110,23 @@ class KbDecider(Decider):
         return r.json()
 
 
-def classify(con, base_url, model, workers=4, limit=None, sample=None, seed=7, stale=False, budget_minutes=None,
-             log=print):
-    decider = KbDecider(base_url, model)
-    model_id = decider.model_id()
+def classify_todo(con, model_id, stale=False):
+    """Enriched topics without a current tips classification by model_id (stale: or one older than the enrichment)."""
     extra = "AND c.created_at >= COALESCE(t.enriched_at, '')" if stale else ""
-    rows = con.execute(
+    return con.execute(
         f"""SELECT t.* FROM topics t
             WHERE t.enriched_at IS NOT NULL AND NOT EXISTS (
                 SELECT 1 FROM classifications c WHERE c.topic_id=t.id AND c.model=? AND c.prompt_version=? {extra})
             ORDER BY t.id DESC""",
         (model_id, PROMPT_VERSION),
     ).fetchall()
+
+
+def classify(con, base_url, model, workers=4, limit=None, sample=None, seed=7, stale=False, budget_minutes=None,
+             log=print):
+    decider = KbDecider(base_url, model)
+    model_id = decider.model_id()
+    rows = classify_todo(con, model_id, stale)
     if sample:
         rows = random.Random(seed).sample(rows, min(sample, len(rows)))
     if limit:
@@ -265,13 +270,11 @@ def write_one(llm, row, mode):
     return best
 
 
-def write(con, base_url, model, workers=4, limit=None, min_p=0.0, redo=False, budget_minutes=None, log=print):
-    """Write entries for topics whose latest tips classification says solved/tip with probability >= min_p."""
-    llm = LLM(base_url, model)
-    model_id = llm.model_id()
+def write_todo(con, min_p=0.0, redo=False):
+    """Solved/tip topics (latest tips classification, p >= min_p) without a current entry."""
     todo = "" if redo else """AND NOT EXISTS (SELECT 1 FROM kb_entries k WHERE k.topic_id=t.id AND k.headline IS NOT NULL
                                   AND k.prompt_version=? AND k.mode=x.mode AND k.created_at >= x.created_at)"""
-    rows = con.execute(
+    return con.execute(
         f"""WITH x AS (
                 SELECT c.topic_id, json_extract(c.answers, '$.qa.choice') AS mode, c.created_at,
                        json_extract(c.answers, '$.qa.probabilities.' || json_extract(c.answers, '$.qa.choice')) AS p,
@@ -283,6 +286,13 @@ def write(con, base_url, model, workers=4, limit=None, min_p=0.0, redo=False, bu
             ORDER BY t.id DESC""",
         (min_p,) if redo else (min_p, WRITE_VERSION),
     ).fetchall()
+
+
+def write(con, base_url, model, workers=4, limit=None, min_p=0.0, redo=False, budget_minutes=None, log=print):
+    """Write entries for topics whose latest tips classification says solved/tip with probability >= min_p."""
+    llm = LLM(base_url, model)
+    model_id = llm.model_id()
+    rows = write_todo(con, min_p, redo)
     if limit:
         rows = rows[:limit]
     log(f"[kb-write] {len(rows)} topics with {model_id} ({WRITE_VERSION})")

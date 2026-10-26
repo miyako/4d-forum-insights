@@ -89,7 +89,7 @@ button { font: inherit; color: inherit; }
 }
 
 .btn.switch { flex: none; white-space: nowrap; }
-.btn.switch[hidden] { display: none; }
+.btn.switch[hidden], .run-select[hidden] { display: none; }
 .theme-menu { position: relative; flex: none; }
 .theme-btn { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .theme-btn:hover, .theme-btn[aria-expanded=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }

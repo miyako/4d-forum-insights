@@ -122,4 +122,6 @@ where it stopped.
 ## Updates
 
 After a delta (new replies re-enrich a thread), `make voices` re-rates changed candidates (`--stale`), rates new
-candidates, and rewrites the write-ups whose rating is newer.
+candidates, and rewrites the write-ups whose rating is newer. The weekly delta workflow runs the same steps
+(time-boxed, after the main classify and Tips), so Voices stays current on its own; run `make voices` locally only
+for a backlog, e.g. after a prompt change.
