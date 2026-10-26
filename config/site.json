@@ -4,7 +4,8 @@
   "feature_request_category": 27,
   "_preferred_runs": "Default run = first model here that has classifications (else the run with the most topics).",
   "preferred_runs": ["ggml-org/Kev-4B-GGUF:Q8_0", "ggml-org/Kev-4B-GGUF:Q8_0:original"],
-  "hidden_runs": [],
+  "_hidden_runs": "Runs left out of the site entirely (model, or model/prompt_version). The two :original runs are small upstream prompt experiments. With one run left, the Model run selector is hidden.",
+  "hidden_runs": ["ggml-org/Julia-1-GGUF:Q8_0:original", "ggml-org/Kev-4B-GGUF:Q8_0:original"],
   "presets": [
     {
       "id": "hidden-fr",

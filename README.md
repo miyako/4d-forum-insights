@@ -115,8 +115,8 @@ Questions are data-driven end to end. To add a question:
 
 **Multiple runs.** Every (model, prompt_version) pair is a separate run.
 
-- The "Model run" selector chooses which run drives the filters, sort and chips. The detail panel always shows every run's answers.
-- `config/site.json` → `preferred_runs` picks the default run, and `hidden_runs` hides runs.
+- The "Model run" selector chooses which run drives the filters, sort and chips; it only appears when the build has two or more runs. The detail panel always shows every run's answers.
+- `config/site.json` → `preferred_runs` picks the default run, and `hidden_runs` leaves runs out. The live site hides the two small upstream prompt experiments (`:original`, 735 + 334 topics), so it has one run and no selector.
 - Run files carry their own level and choice order, so questions can evolve between versions.
 
 URL parameters for answers are `a.<question>=<bands, levels or choices>`, for example `a.fr=high,medium`, `a.fr=3,4` (levels still work for older links) or `a.kind=bug_report`. Yes/no questions use `a.<question>=yes|strong|no`.

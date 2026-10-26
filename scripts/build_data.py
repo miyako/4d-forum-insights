@@ -515,6 +515,13 @@ def main():
         for e in embed:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
+    # drop answer files of runs that are gone or now hidden (site/data is reused between builds)
+    live = {r["file"].split("?")[0] for r in runs + (tips["runs"] if tips else [])}
+    for p in [*out.glob("answers/*.json"), *out.glob("tips/answers/*.json")]:
+        if p.relative_to(out).as_posix() not in live:
+            p.unlink()
+            print(f"  removed stale {p.relative_to(out).as_posix()}")
+
     sizes = {p.relative_to(out).as_posix(): p.stat().st_size for p in sorted(out.rglob("*.json"))}
     print(f"{len(rows)} topics ({manifest['stats']['enriched']} enriched), {len(runs)} runs "
           f"(default {default_run}), {len(questions)} questions, {len(tags)} tags")

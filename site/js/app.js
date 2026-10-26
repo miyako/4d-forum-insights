@@ -209,7 +209,7 @@ function renderStatic() {
   $('#voices-link').hidden = !m.voices?.entries;
   const runSel = $('#run');
   runSel.innerHTML = m.runs.map((r) => `<option value="${esc(r.id)}">${esc(r.label)} — ${num.format(r.count)} topics${r.id === m.default_run ? ' (default)' : ''}</option>`).join('');
-  runSel.disabled = m.runs.length < 2;
+  runSel.closest('.run-select').hidden = m.runs.length < 2;
   runSel.addEventListener('change', async () => {
     await selectRun(runSel.value);
     renderFilterShell();
@@ -683,7 +683,7 @@ async function renderDetail(id) {
     </dl>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     <section><h3>Summary <span class="muted small">(machine-generated)</span></h3>${summary}</section>
-    <section><h3>Model answers</h3><div id="runs-detail">${runs.map((r) => `<details class="run" data-run="${esc(r.id)}" ${r.id === app.run?.id ? 'open' : ''}><summary>${esc(r.label)}${r.id === app.run?.id ? ' <span class="muted">(selected)</span>' : ''}</summary><div class="run-body muted small">Loading…</div></details>`).join('') || '<p class="muted">No model runs in this build.</p>'}</div></section>
+    <section><h3>Model answers</h3><div id="runs-detail">${runs.map((r) => `<details class="run" data-run="${esc(r.id)}" ${r.id === app.run?.id ? 'open' : ''}><summary>${esc(r.label)}${r.id === app.run?.id && runs.length > 1 ? ' <span class="muted">(selected)</span>' : ''}</summary><div class="run-body muted small">Loading…</div></details>`).join('') || '<p class="muted">No model runs in this build.</p>'}</div></section>
     ${m.embeddings ? `<section><h3>Similar topics</h3><div id="similar">${app.semantic.vectors ? '<p class="muted small">Loading…</p>' : `<button type="button" class="btn" data-similar>Find similar topics <span class="muted">(${(m.embeddings.bytes / 1e6).toFixed(1)} MB)</span></button>`}</div></section>` : ''}`;
   for (const r of runs) {
     loadRun(m, r.id).then((answers) => {
