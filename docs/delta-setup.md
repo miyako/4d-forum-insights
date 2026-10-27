@@ -243,6 +243,9 @@ English publication. Retry localization manually if needed. Model/credential
 failures occur only in the separate localization workflow. `contents: write`
 allows sending the dispatch with `github.token`; repository dispatch is an
 exception to GitHub's normal token-trigger recursion suppression.
+The localization publishing job also needs `actions: write` on its `github.token`
+to dispatch the Pages workflow after uploading overlays. This job-level permission
+is separate from the Copilot authentication secret and requires no PAT scope change.
 Set repository
 variable `LOCALIZATION_MODEL` to an explicitly available hosted model and secret
 `COPILOT_GITHUB_TOKEN` to a token authorized for Copilot CLI; there is no implicit

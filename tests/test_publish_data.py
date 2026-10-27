@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -341,6 +342,17 @@ class PublicationTests(unittest.TestCase):
         store = self.root / "prepared"
         publisher.prepare_localization(source, seeds, store)
         self.assertEqual(json.loads((store / "fr/tips.json").read_text())["entries"], {})
+
+
+class WorkflowPermissionsTests(unittest.TestCase):
+    def test_localization_publisher_can_upload_assets_and_dispatch_pages(self):
+        workflow = (Path(__file__).parents[1] / ".github/workflows/localization.yml").read_text()
+        job = workflow.split("\n  localize:\n", 1)[1].split("\n  translation-status:", 1)[0]
+        match = re.search(r"^    permissions:\n((?:^      [^\n]+\n)+)", job, re.MULTILINE)
+        self.assertIsNotNone(match, "The publication job needs explicit token permissions")
+        permissions = dict(line.strip().split(": ", 1) for line in match.group(1).splitlines())
+        self.assertEqual(permissions.get("contents"), "write")
+        self.assertEqual(permissions.get("actions"), "write")
 
 
 if __name__ == "__main__":

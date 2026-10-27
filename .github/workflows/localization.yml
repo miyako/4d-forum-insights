@@ -36,6 +36,9 @@ jobs:
   localize:
     runs-on: ubuntu-latest
     timeout-minutes: 80
+    permissions:
+      contents: write
+      actions: write
     outputs:
       runner_outcome: ${{ steps.translate.outcome }}
     steps:
