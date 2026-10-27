@@ -42,7 +42,7 @@ function options(fields) {
     processTerm,
     extractField: (doc, f) => (f === 'tags' ? doc.tags.join(' ') : doc[f] || ''),
     searchOptions: {
-      boost: { title_en: 2.2, title: 2, tags: 1.6, line: 1, para: 0.6 },
+      boost: { title_en: 2.2, title: 2, tags: 1.6, line: 1, para: 0.6, fallback: 0.6 },
       prefix: (term) => term.length > 2,
       fuzzy: (term) => (term.length > 5 ? 0.15 : false),
       processTerm: (t) => { const n = normalize(t); return STOP.has(n) ? null : n; },
@@ -52,16 +52,20 @@ function options(fields) {
 
 export class KeywordIndex {
   constructor(topics) {
-    this.topics = topics;
-    this.byId = new Map(topics.map((t) => [t.id, t]));
-    this.index = new MiniSearch(options(['title', 'title_en', 'line', 'tags']));
-    this.index.addAll(topics);
+    this.sourceTopics = new Map(topics.map(topic => [topic.id, topic]));
+    this.topics = topics.map(topic => ({ ...topic, fallback: topic.canonicalFields
+      ? Object.values(topic.canonicalFields).flat().join(' ') : '' }));
+    this.byId = new Map(this.topics.map((t) => [t.id, t]));
+    this.index = new MiniSearch(options(['title', 'title_en', 'line', 'tags', 'fallback']));
+    this.index.addAll(this.topics);
     this.full = false;
   }
 
   /** Rebuild with the summary paragraphs in the background, then swap. */
   async addParagraphs() {
-    const idx = new MiniSearch(options(['title', 'title_en', 'line', 'tags', 'para']));
+    const idx = new MiniSearch(options(['title', 'title_en', 'line', 'tags', 'para', 'fallback']));
+    // Paragraphs may have been attached after the first index build.
+    for (const topic of this.topics) topic.para = this.sourceTopics.get(topic.id).para;
     await idx.addAllAsync(this.topics, { chunkSize: 500 });
     this.index = idx;
     this.full = true;
@@ -89,7 +93,7 @@ export class KeywordIndex {
     if (phrases.length) {
       res = res.filter((r) => {
         const t = this.byId.get(r.id);
-        const hay = normalize([t.title, t.title_en, t.line, t.para].filter(Boolean).join(' '));
+        const hay = normalize([t.title, t.title_en, t.line, t.para, t.fallback].filter(Boolean).join(' '));
         return phrases.every((ph) => hay.includes(ph));
       });
     }

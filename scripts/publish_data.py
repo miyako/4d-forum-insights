@@ -18,8 +18,13 @@ import uuid
 
 LOCK_REF = "heads/data-publication-lock"
 TRANSLATION_VERSION = "1"
+PAGE_FIELDS = {
+    "tips": ("headline", "body"),
+    "voices": ("question", "positions", "outcome"),
+    "requests": ("title_en", "line", "para"),
+}
 LOCALE_PATHS = [f"data/locales/{locale}/{view}.json"
-                for locale in ("fr", "ja") for view in ("tips", "voices")]
+                for locale in ("fr", "ja") for view in PAGE_FIELDS]
 
 
 def run(*args, check=True):
@@ -119,9 +124,9 @@ def read_overlays(archive):
 def validate_overlay(document):
     if not isinstance(document, dict) or document.get("version") != 1 or not isinstance(document.get("entries"), dict):
         raise ValueError("Locale overlays require version: 1 and entries keyed by ID")
-    if document.get("locale") not in ("fr", "ja") or document.get("page") not in ("tips", "voices"):
+    if document.get("locale") not in ("fr", "ja") or document.get("page") not in PAGE_FIELDS:
         raise ValueError("Invalid locale/page identity")
-    expected_fields = {"headline", "body"} if document["page"] == "tips" else {"question", "positions", "outcome"}
+    expected_fields = set(PAGE_FIELDS[document["page"]])
     for key, entry in document["entries"].items():
         if (not re.fullmatch(r"[1-9][0-9]*", key) or int(key) > 9007199254740991
                 or not isinstance(entry, dict)
@@ -134,13 +139,15 @@ def validate_overlay(document):
             raise ValueError("Unexpected translation fields")
         for field, value in fields.items():
             values = value if field == "positions" else [value]
-            if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v.strip() for v in values):
+            if (not isinstance(values, list) or not values
+                    or any(not isinstance(v, str) or (document["page"] != "requests" and not v.strip())
+                           for v in values)):
                 raise ValueError(f"Invalid translated field: {field}")
     return document
 
 
 def column_hashes(page, columns):
-    fields = ("headline", "body") if page == "tips" else ("question", "positions", "outcome")
+    fields = PAGE_FIELDS[page]
     hashes = {}
     for index, topic_id in enumerate(columns["ids"]):
         source = {field: columns[field][index] for field in fields}
@@ -149,10 +156,49 @@ def column_hashes(page, columns):
     return hashes
 
 
+def request_hashes(topics, text):
+    """Hash generated English only; never filter/reorder the Requests topic corpus."""
+    fields = topics["fields"]
+    indexes = {field: fields.index(field) for field in ("id", "title_en", "line")}
+    rows = topics["rows"]
+    if len(text["para"]) != len(rows):
+        raise ValueError("Requests paragraph count must match topic rows")
+    hashes = {}
+    for row, paragraph in zip(rows, text["para"]):
+        source = {key: "" if value is None else value for key, value in {
+            "title_en": row[indexes["title_en"]], "line": row[indexes["line"]], "para": paragraph,
+        }.items()}
+        topic_id = row[indexes["id"]]
+        if (type(topic_id) is not int or not 1 <= topic_id <= 9007199254740991
+                or str(topic_id) in hashes):
+            raise ValueError(f"Invalid/duplicate Requests topic ID: {topic_id}")
+        if any(not isinstance(value, str) for value in source.values()):
+            raise ValueError("Requests source fields must be strings")
+        canonical = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        hashes[str(topic_id)] = hashlib.sha256(canonical.encode()).hexdigest()
+    return hashes
+
+
+def request_source_paths(manifest):
+    files = manifest.get("files", {})
+    paths = []
+    for key, default in (("topics", "topics.json"), ("text", "text.json")):
+        relative = re.split(r"[?#]", files.get(key, default), maxsplit=1)[0]
+        path = Path(relative)
+        if not relative or path.is_absolute() or ".." in path.parts:
+            raise ValueError("Requests source path escapes data directory")
+        paths.append(path.as_posix())
+    return paths
+
+
 def english_hashes(archive):
     with tarfile.open(archive, "r:gz") as tar:
-        return {page: column_hashes(page, json.load(tar.extractfile(f"data/{page}/entries.json")))
-                for page in ("tips", "voices")}
+        hashes = {page: column_hashes(page, json.load(tar.extractfile(f"data/{page}/entries.json")))
+                  for page in ("tips", "voices")}
+        paths = [f"data/{path}" for path in request_source_paths(json.load(tar.extractfile("data/manifest.json")))]
+        hashes["requests"] = (request_hashes(*(json.load(tar.extractfile(path)) for path in paths))
+                              if set(paths) <= set(tar.getnames()) else {})
+        return hashes
 
 
 def prepare_localization(data, seeds, store, archive=None):
@@ -161,6 +207,11 @@ def prepare_localization(data, seeds, store, archive=None):
     for page in ("tips", "voices"):
         path = data / page / "entries.json"
         hashes[page] = column_hashes(page, json.loads(path.read_text())) if path.is_file() else {}
+    manifest = data / "manifest.json"
+    paths = request_source_paths(json.loads(manifest.read_text())) if manifest.is_file() else ("topics.json", "text.json")
+    topics, text = (data / path for path in paths)
+    hashes["requests"] = (request_hashes(json.loads(topics.read_text()), json.loads(text.read_text()))
+                          if topics.is_file() and text.is_file() else {})
     published = {}
     if archive and archive.is_file():
         try:

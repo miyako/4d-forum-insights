@@ -46,10 +46,12 @@ jobs:
           python3 scripts/publish_data.py prepare-localization \
             --data site/data --seeds localization --store site/data/locales \
             --archive build/published/localization.tar.gz
+      - name: Verify static Requests route
+        run: test -f site/requests/index.html
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: site # Include /requests/ alongside the root, /tips/ and /voices/.
 
   deploy:
     needs: build

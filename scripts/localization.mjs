@@ -4,8 +4,30 @@ import path from 'node:path';
 
 export const VERSION = '1';
 export const LOCALES = ['fr', 'ja'];
-export const PAGES = ['voices', 'tips'];
-export const FIELDS = { tips: ['headline', 'body'], voices: ['question', 'positions', 'outcome'] };
+export const PAGES = ['voices', 'tips', 'requests'];
+export const FIELDS = { tips: ['headline', 'body'], voices: ['question', 'positions', 'outcome'],
+  requests: ['title_en', 'line', 'para'] };
+
+export function readSourceRecords(root, page) {
+  const read = file => {
+    const relative = file.split(/[?#]/)[0];
+    const target = path.resolve(root, relative), base = path.resolve(root);
+    if (!target.startsWith(`${base}${path.sep}`)) throw Error('Source path escapes data directory');
+    return JSON.parse(fs.readFileSync(target, 'utf8'));
+  };
+  if (page !== 'requests') return recordsFromColumns(page, read(`${page}/entries.json`));
+  const manifest = read('manifest.json');
+  const { fields, rows } = read(manifest.files.topics);
+  const { para } = read(manifest.files.text);
+  if (!Array.isArray(para) || para.length !== rows.length) throw Error('Mismatched Requests paragraphs');
+  const column = key => {
+    const index = fields.indexOf(key);
+    if (index < 0) throw Error(`Missing Requests column ${key}`);
+    return rows.map(row => key !== 'id' && row[index] === null ? '' : row[index]);
+  };
+  return recordsFromColumns(page, { ids: column('id'), title_en: column('title_en'), line: column('line'),
+    para: para.map(value => value === null ? '' : value) });
+}
 
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -45,7 +67,10 @@ export function validateShape(page, fields, source) {
         throw Error('Invalid positions');
       }
       if (source && value.length !== source[key].length) throw Error('Changed position count');
-    } else if (typeof value !== 'string' || !value.trim()) throw Error(`Invalid ${key}`);
+    } else if (typeof value !== 'string' || (page !== 'requests' && !value.trim()) ||
+        (page === 'requests' && source && Boolean(value.trim()) !== Boolean(source[key].trim()))) {
+      throw Error(`Invalid ${key}`);
+    }
   }
 }
 

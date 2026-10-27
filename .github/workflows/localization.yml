@@ -8,7 +8,7 @@ on:
       page:
         description: 'Summary view'
         type: choice
-        options: [all, tips, voices]
+        options: [all, tips, voices, requests]
         default: all
       locale:
         description: 'Target locale'
@@ -66,7 +66,7 @@ jobs:
               value = os.environ[name]
               if not value.isascii() or not value.isdigit() or not 1 <= int(value) <= maximum:
                   raise SystemExit(f"{name} must be an integer from 1 to {maximum}")
-          if os.environ["TARGET_PAGE"] not in ("all", "tips", "voices"):
+          if os.environ["TARGET_PAGE"] not in ("all", "tips", "voices", "requests"):
               raise SystemExit("Invalid page")
           if os.environ["TARGET_LOCALE"] not in ("all", "fr", "ja"):
               raise SystemExit("Invalid locale")

@@ -9,7 +9,7 @@ These assets live on the [`data` release](https://github.com/miyako/4d-forum-ins
 | Asset | What it is | Public? |
 |---|---|---|
 | `site-data.tar.gz` | The website's data: titles, English titles, machine-generated summaries, metadata, model scores and search vectors. These are the same files the site serves under `/data/`. | Yes, by design |
-| `localization.tar.gz` | Optional French/Japanese Tips and Voices overlays, published separately from English. Missing or stale translations fall back to English. | Yes, by design |
+| `localization.tar.gz` | Optional French/Japanese Requests, Tips and Voices overlays, published separately from English. Missing or stale translations fall back to English. | Yes, by design |
 | `forum.db.zst.enc` | The pipeline's working database (`forum.db`, about 160 MB), which contains **full forum thread text**. It is zstd-compressed and then AES-256 encrypted (about 47 MB). The previous copy is kept as `forum.db.prev.zst.enc`. | No: unreadable without `DB_KEY` |
 
 - The repository is public, so anyone can download release assets. That is why the database is encrypted.
@@ -209,11 +209,11 @@ a maintainer must explicitly restore a reviewed candidate using capture-before-
 restoration and sealing against the now-empty base. Do not silently refresh
 provenance as part of a retry.
 
-Optional local seeds live under ignored `localization/{fr,ja}/{tips,voices}.json`. Hosted jobs
+Optional local seeds live under ignored `localization/{fr,ja}/{requests,tips,voices}.json`. Hosted jobs
 prepare `build/localization` from the independent downloaded asset (plus seeds if supplied),
 and use `node scripts/localize.mjs --data site/data --store build/localization …`
 to checkpoint new translations. The archive uses
-`data/locales/{fr,ja}/{tips,voices}.json`; extracting with `--strip-components=2`
+`data/locales/{fr,ja}/{requests,tips,voices}.json`; extracting with `--strip-components=2`
 places overlays directly into `build/localization`. Do not replace whole seed
 files with older release files: merge validated entries matching current English
 source hashes. Pages combines optional seeds with the latest release overlays after
@@ -234,6 +234,13 @@ python3 scripts/publish_data.py prepare-localization \
 The archive is optional. Invalid optional release overlays are ignored with a
 warning; current seeds remain usable. All output entries match current English
 source hashes. Pages uses `--store site/data/locales`.
+Requests uses all topic rows from `topics.json` and aligned paragraphs from `text.json`.
+Its canonical per-topic source fields are exactly `title_en`, `line` and `para`; null
+generated fields normalize to empty strings, never the original forum title.
+These generated fields are the only Requests translation inputs. No topic filtering,
+re-rating, embedding rebuild or corpus changes are part of localization. The current
+17,017-topic snapshot therefore remains intact. See [localization](localization.md)
+for the source-hash and empty-field contract.
 
 The [localization workflow](../.github/workflows/localization.yml) runs on the
 `english-data-published` repository dispatch sent after every successful production
@@ -253,7 +260,7 @@ model or authentication fallback. Optional variable `LOCALIZATION_REASONING_EFFO
 must be supported by that model. It installs verified CLI version `1.0.104`, with
 tools and built-in MCPs disabled by the runner.
 
-Manual dispatch accepts `page` (`all`, `tips`, `voices`), `locale` (`all`, `fr`,
+Manual dispatch accepts `page` (`all`, `requests`, `tips`, `voices`), `locale` (`all`, `fr`,
 `ja`), `entries` (1–1000), `minutes` (1–40), and `batch_size` (1–50). Defaults are
 all/all/100/20/20. Successful batches are checkpointed and published even when
 another batch fails. A separate **Translation status** job still fails for model,

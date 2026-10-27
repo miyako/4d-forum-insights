@@ -241,6 +241,10 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 13px; }
 .noscript { padding: 20px; }
 
 /* ---------------------------------------------------------------- responsive */
+html[data-localizing] body { visibility: hidden; }
+.locale-nav { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: .85rem; }
+.locale-nav a { padding: 4px; border-radius: 4px; }
+.locale-nav a[aria-current] { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
 @media (max-width: 1100px) {
   body.has-detail .layout { grid-template-columns: 240px minmax(0, 1fr); }
   .detail { position: fixed; inset: 0 0 0 auto; width: min(560px, 100vw); max-height: none; top: 0; border-radius: 0; z-index: 30; }
@@ -265,4 +269,7 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 13px; }
   .card { flex-direction: column; gap: 6px; }
   .card-side { flex-direction: row; flex-wrap: wrap; align-items: center; max-width: none; }
   .prob { grid-template-columns: 110px 1fr 40px; }
+  .toolbar-right { flex-wrap: wrap; min-width: 0; }
+  .toolbar select { max-width: 45vw; }
+  .btn.switch { padding-inline: 7px; }
 }

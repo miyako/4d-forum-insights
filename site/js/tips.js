@@ -4,14 +4,14 @@ import { loadManifest, loadTopics, loadText, dataUrl, decodeRun } from './data.j
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
 import { rrf } from './filter.js';
-import { createLocale, localeOf, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
+import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
 import {
   parseTipsState, serializeTipsState, buildItems, tipsPredicates, applyTips, sortTips, SORTS,
 } from './tips-core.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const i18n = createLocale(localeOf(location.search));
+const i18n = createLocale(preferredLocale(location.search));
 const { t: tr, number: num, compact, pct, date: fmtDate } = i18n;
 installLocale(i18n, 'tips');
 const STATE_KEYS = ['q', 'mode', 'area', 'type', 'conf', 'since', 'sort', 'all'];
@@ -77,7 +77,7 @@ async function init() {
   loadText(m, topics).then(() => { app.textLoaded = true; }).catch((e) => console.warn('text.json', e));
 
   window.addEventListener('popstate', () => {
-    if (localeOf(location.search) !== i18n.locale) return location.reload();
+    if (preferredLocale(location.search) !== i18n.locale) return location.reload();
     app.state = parseTipsState(location.search);
     syncControls();
     update({ history: false });
@@ -186,7 +186,7 @@ function renderStatic() {
       <code>${esc(app.run.model)}</code> (${esc(app.run.prompt_version)}).
       ${tr('Entries are machine-generated from public threads on')} <a href="${esc(m.forum_url)}">${esc(m.forum_url.replace(/^https?:\/\//, ''))}</a>.
       ${tr('The forum posts themselves are not republished.')} ${tr('Data')} ${esc(dataDate(m.generated_at))}.
-      <a href="../">Forum Insights</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
+      <a href="../requests/">${tr('Forum Requests')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
 
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); setQuery($('#q').value); });
   let timer;
@@ -355,7 +355,7 @@ function renderWhy(d) {
       <dt>${tr('Original title')}</dt><dd lang="${esc(ans.lang || 'en')}">${esc(ans.title)}</dd>
     </dl>
     ${app.textLoaded && ans.para ? `<p class="small"><strong>${tr('English source summary')}:</strong> <span lang="en">${esc(ans.para)}</span></p>` : ''}
-    <p class="small"><a href="${esc(localeURL('../?t=' + ans.id, i18n.locale, location.href))}">${tr('Open in Forum Insights')}</a></p>`;
+    <p class="small"><a href="${esc(localeURL('../requests/?t=' + ans.id, i18n.locale, location.href))}">${tr('Open in Forum Requests')}</a></p>`;
   localizeDOM(d.querySelector('.why-body'), i18n);
 }
 

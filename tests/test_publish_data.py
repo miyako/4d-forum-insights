@@ -113,13 +113,24 @@ class PublicationTests(unittest.TestCase):
     def source(self):
         source = self.root / "source"
         source.mkdir()
-        (source / "manifest.json").write_text("{}")
+        (source / "manifest.json").write_text(json.dumps({
+            "files": {"topics": "topics.json", "text": "text.json"},
+        }))
         for page, columns in (
             ("tips", {"headline": ["New 日本語"], "body": ["Text"]}),
             ("voices", {"question": ["Question"], "positions": [["One", "Two"]], "outcome": ["Result"]}),
         ):
             (source / page).mkdir()
             (source / page / "entries.json").write_text(json.dumps({"ids": [1], **columns}))
+        (source / "topics.json").write_text(json.dumps({
+            "fields": ["id", "title", "title_en", "line"],
+            "rows": [[1, "Original 日本語", "English title", "English summary"],
+                     [2, "Untranslated original", None, ""],
+                     [3, "Original français", None, "Summary only"]],
+        }))
+        (source / "text.json").write_text(json.dumps({
+            "count": 3, "para": ["English paragraph", "", "Paragraph only"],
+        }))
         return source
 
     def test_english_publish_excludes_locales(self):
@@ -283,6 +294,129 @@ class PublicationTests(unittest.TestCase):
         )
         self.assertEqual(publisher.english_hashes(archive)["tips"]["1"], result.stdout.strip())
 
+    def test_requests_hashes_match_javascript_and_keep_all_topic_ids(self):
+        source = self.source()
+        archive = self.root / "site-data.tar.gz"
+        publisher.pack_site(source, archive)
+        expected = [
+            {"title_en": "English title", "line": "English summary", "para": "English paragraph"},
+            {"title_en": "", "line": "", "para": ""},
+            {"title_en": "", "line": "Summary only", "para": "Paragraph only"},
+        ]
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e",
+             "import {sourceHash} from './scripts/localization.mjs';"
+             f"console.log(JSON.stringify({json.dumps(expected)}.map(sourceHash)));"],
+            check=True, capture_output=True, text=True,
+        )
+        hashes = publisher.english_hashes(archive)["requests"]
+        self.assertEqual(list(hashes), ["1", "2", "3"])
+        self.assertEqual(list(hashes.values()), json.loads(result.stdout))
+        loaded = subprocess.run(
+            ["node", "--input-type=module", "-e",
+             "import {readSourceRecords} from './scripts/localization.mjs';"
+             f"console.log(JSON.stringify(readSourceRecords({json.dumps(str(source))},'requests')));"],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual({str(record["id"]): record["source_hash"] for record in json.loads(loaded.stdout)},
+                         hashes)
+        topics = json.loads((source / "topics.json").read_text())
+        text = json.loads((source / "text.json").read_text())
+        topics["rows"][0][1] = "Changed original title"
+        self.assertEqual(publisher.request_hashes(topics, text), hashes)
+        text["para"][0] = "Changed English paragraph"
+        self.assertNotEqual(publisher.request_hashes(topics, text)["1"], hashes["1"])
+        self.assertEqual(publisher.request_hashes(topics, text)["3"], hashes["3"])
+        with self.assertRaisesRegex(ValueError, "paragraph count"):
+            publisher.request_hashes(topics, {"para": []})
+        topics["rows"][1][3] = None
+        text["para"][1] = None
+        self.assertEqual(publisher.request_hashes(topics, text)["2"], hashes["2"])
+
+    def test_requests_overlay_shape_rejects_raw_fields_and_nonstring_translations(self):
+        overlay = {"version": 1, "locale": "ja", "page": "requests", "entries": {
+            "1": {"source_hash": "0" * 64, "translation_version": "1",
+                  "fields": {"title_en": "", "line": "要約", "para": "段落"}},
+        }}
+        publisher.validate_overlay(overlay)
+        overlay["entries"]["1"]["fields"] = {"title_en": "", "line": "", "para": ""}
+        publisher.validate_overlay(overlay)
+        for fields in ({}, {"title": "Original"}, {"line": "要約"},
+                       {"title_en": "", "line": None, "para": "段落"}):
+            with self.subTest(fields=fields):
+                overlay["entries"]["1"]["fields"] = fields
+                with self.assertRaises(ValueError):
+                    publisher.validate_overlay(overlay)
+
+    def test_requests_resolve_manifest_paths_with_cache_keys(self):
+        source = self.source()
+        nested = source / "generated"
+        nested.mkdir()
+        (source / "topics.json").rename(nested / "topics-current.json")
+        (source / "text.json").rename(nested / "paragraphs-current.json")
+        manifest = {"files": {"topics": "generated/topics-current.json?v=123",
+                              "text": "generated/paragraphs-current.json?v=456#text"}}
+        (source / "manifest.json").write_text(json.dumps(manifest))
+        archive = self.root / "site-data.tar.gz"
+        publisher.pack_site(source, archive)
+        hashes = publisher.english_hashes(archive)["requests"]
+        loaded = subprocess.run(
+            ["node", "--input-type=module", "-e",
+             "import {readSourceRecords} from './scripts/localization.mjs';"
+             f"console.log(JSON.stringify(readSourceRecords({json.dumps(str(source))},'requests')));"],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(hashes, {str(record["id"]): record["source_hash"]
+                                  for record in json.loads(loaded.stdout)})
+        publisher.prepare_localization(source, self.root / "missing", self.root / "prepared")
+        for unsafe in ("../topics.json", "/topics.json"):
+            manifest["files"]["topics"] = unsafe
+            with self.subTest(path=unsafe), self.assertRaisesRegex(ValueError, "escapes"):
+                publisher.request_source_paths(manifest)
+
+    def test_requests_preparation_and_publication_keep_current_tips_and_voices(self):
+        source = self.source()
+        archive = self.root / "site-data.tar.gz"
+        publisher.pack_site(source, archive)
+        gh = FakeGitHub()
+        gh.assets["site-data.tar.gz"] = archive.read_bytes()
+        hashes = publisher.english_hashes(archive)
+        seeds = self.root / "seeds"
+        (seeds / "fr").mkdir(parents=True)
+        for page, fields in (
+            ("tips", {"headline": "Conseil", "body": "Texte"}),
+            ("voices", {"question": "Question", "positions": ["Un", "Deux"], "outcome": "Résultat"}),
+            ("requests", {"title_en": "Titre", "line": "Résumé", "para": "Paragraphe"}),
+        ):
+            overlay = {"version": 1, "locale": "fr", "page": page, "entries": {
+                "1": {"source_hash": hashes[page]["1"], "translation_version": "1", "fields": fields},
+            }}
+            (seeds / "fr" / f"{page}.json").write_text(json.dumps(overlay))
+        store = self.root / "prepared"
+        publisher.prepare_localization(source, seeds, store)
+        first = self.root / "first"
+        first.mkdir()
+        with gh.lease():
+            publisher.publish_localization(gh, "data", store, first, set(gh.assets))
+        released = publisher.read_overlays(first / "localization.tar.gz")
+        for page in ("requests", "tips", "voices"):
+            self.assertIn("1", released[f"data/locales/fr/{page}.json"]["entries"])
+        requests_path = store / "fr/requests.json"
+        delayed = json.loads(requests_path.read_text())
+        delayed["entries"]["1"]["source_hash"] = "0" * 64
+        delayed["entries"]["1"]["fields"]["line"] = "Obsolète"
+        requests_path.write_text(json.dumps(delayed))
+        second = self.root / "second"
+        second.mkdir()
+        with gh.lease():
+            publisher.publish_localization(gh, "data", store, second, set(gh.assets))
+        self.assertEqual(released, publisher.read_overlays(second / "localization.tar.gz"))
+        self.assertEqual(archive.read_bytes(), gh.assets["site-data.tar.gz"])
+        prepared = self.root / "released"
+        publisher.prepare_localization(source, self.root / "missing", prepared, second / "localization.tar.gz")
+        self.assertEqual(json.loads((prepared / "fr/requests.json").read_text()),
+                         released["data/locales/fr/requests.json"])
+
     def test_preparation_merges_current_seeds_and_release_without_stale_replacement(self):
         source = self.source()
         english = self.root / "site-data.tar.gz"
@@ -345,6 +479,15 @@ class PublicationTests(unittest.TestCase):
 
 
 class WorkflowPermissionsTests(unittest.TestCase):
+    def test_requests_workflow_selection_and_static_pages_packaging(self):
+        workflows = Path(__file__).parents[1] / ".github/workflows"
+        localization = (workflows / "localization.yml").read_text()
+        self.assertIn("options: [all, tips, voices, requests]", localization)
+        self.assertIn('("all", "tips", "voices", "requests")', localization)
+        pages = (workflows / "pages.yml").read_text()
+        self.assertIn("test -f site/requests/index.html", pages)
+        self.assertRegex(pages, r"(?m)^          path: site(?:\s+#.*)?$")
+
     def test_localization_publisher_can_upload_assets_and_dispatch_pages(self):
         workflow = (Path(__file__).parents[1] / ".github/workflows/localization.yml").read_text()
         job = workflow.split("\n  localize:\n", 1)[1].split("\n  translation-status:", 1)[0]

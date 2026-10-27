@@ -4,14 +4,14 @@ import { loadManifest, loadTopics, dataUrl } from './data.js';
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
 import { rrf } from './filter.js';
-import { createLocale, localeOf, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
+import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
 import {
   parseVoicesState, serializeVoicesState, buildVoices, debateLevel, voicesPredicates, applyVoices, sortVoices, SORTS,
 } from './voices-core.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const i18n = createLocale(localeOf(location.search));
+const i18n = createLocale(preferredLocale(location.search));
 const { t: tr, number: num, compact, pct, date: fmtDate } = i18n;
 installLocale(i18n, 'voices');
 const STATE_KEYS = ['q', 'mode', 'subject', 'settled', 'since', 'sort', 'all'];
@@ -67,7 +67,7 @@ async function init() {
   if (app.state.mode !== 'kw') startSemantic();
 
   window.addEventListener('popstate', () => {
-    if (localeOf(location.search) !== i18n.locale) return location.reload();
+    if (preferredLocale(location.search) !== i18n.locale) return location.reload();
     app.state = parseVoicesState(location.search);
     syncControls();
     update({ history: false });
@@ -179,7 +179,7 @@ function renderStatic() {
       <a href="${esc(m.forum_url)}">${esc(m.forum_url.replace(/^https?:\/\//, ''))}</a>.
       ${tr('They may be wrong or one-sided.')} ${tr('The forum posts themselves are not republished.')}${removal}
       ${tr('Data')} ${esc(dataDate(m.generated_at))}.
-      <a href="../">Forum Insights</a> · <a href="../tips/">${tr('Forum Tips')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
+      <a href="../requests/">${tr('Forum Requests')}</a> · <a href="../tips/">${tr('Forum Tips')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
 
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); setQuery($('#q').value); });
   let timer;
@@ -344,7 +344,7 @@ function renderWhy(d) {
     </dl>
     <p class="small">${tr('Ratings by')} <code>${esc(v.run.model)}</code>.
       ${tr('The question, views and outcome are written by a local model from the thread and may miss nuances.')}
-      <a href="${esc(localeURL('../?t=' + it.id, i18n.locale, location.href))}">${tr('Open in Forum Insights')}</a>${removal}</p>`;
+      <a href="${esc(localeURL('../requests/?t=' + it.id, i18n.locale, location.href))}">${tr('Open in Forum Requests')}</a>${removal}</p>`;
   localizeDOM(d.querySelector('.why-body'), i18n);
 }
 
