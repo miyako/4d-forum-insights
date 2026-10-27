@@ -61,6 +61,10 @@ restoration. Technical names not recognized by the mask must still be preserved 
 This is deterministic structural validation, **not** a claim that automated checks prove semantic accuracy.
 English question-word and whitespace word-count checks are deliberately not applied to French/Japanese.
 
+Requests also masks bare uppercase commands/constants, dotted API paths and calls, `#` directives and
+underscore identifiers. Its batch/text-cache `protection_version` is `2`; stale masked batches are
+rejected. Tips/Voices masking and portable overlay `translation_version: "1"` remain unchanged.
+
 ## Local frontier-model backfill
 
 Authenticate the installed Copilot CLI normally. Do not copy credentials into this repository.
@@ -128,6 +132,14 @@ node scripts/localize.mjs --data site/data --store build/review-localization \
 Keep the combined portable store, Requests text cache, coverage report and pinned English source archive
 on the nonproduction draft review release. Maintainer approval is still required before promotion.
 Hosted small deltas continue using `localize.mjs`; they do not redo this initial string backfill.
+
+An older exact-string cache requires an explicit one-time `--upgrade-protection` writable run.
+This backs up the old cache under `cache-backups/protection-v1`, validates its original protected
+tokens, then revalidates every string against the Requests-specific mask. Passing entries are retained;
+only rejected strings are removed and retranslated. Topic overlays with an uncertified field are
+removed until all their fields are current. Do not combine an upgrade with `--check-only`, or promote
+the old archive while the upgrade is incomplete. Afterward rerun `--check-only --require-complete`
+and regenerate portable review artifacts and checksums.
 
 To translate through the current agent instead of the programmatic CLI, use the same validated exchange:
 

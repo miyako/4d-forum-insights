@@ -4,7 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  VERSION, LOCALES, sourceHash, protect, restore, readSourceRecords,
+  VERSION, REQUESTS_PROTECTION_VERSION, LOCALES, sourceHash, protect, restore, readSourceRecords,
   readOverlay, writeOverlay, coverage,
 } from './localization.mjs';
 import { callCopilot } from './localize.mjs';
@@ -18,30 +18,38 @@ export function stringUnits(records) {
   return units;
 }
 
-function validateText(source, text) {
+function validateText(source, text, legacy = false) {
   if (typeof text !== 'string' || !text.trim()) throw Error('Empty/non-string translation');
-  const masked = protect(fields(source));
+  const masked = protect(fields(source), legacy ? undefined : 'requests');
   // Re-mask only the original protected tokens, preserving their multiplicities.
-  let translated = text;
+  const replacements = [];
   for (const { marker, text: token } of [...masked.tokens].sort((a, b) => b.text.length - a.text.length)) {
-    const index = translated.indexOf(token);
+    let index = text.indexOf(token);
+    while (index >= 0 && replacements.some(r => index < r.end && index + token.length > r.start)) {
+      index = text.indexOf(token, index + 1);
+    }
     if (index < 0) throw Error('Changed protected token in cache');
-    translated = translated.slice(0, index) + marker + translated.slice(index + token.length);
+    replacements.push({ start: index, end: index + token.length, marker });
+  }
+  let translated = text;
+  for (const { start, end, marker } of replacements.sort((a, b) => b.start - a.start)) {
+    translated = translated.slice(0, start) + marker + translated.slice(end);
   }
   restore('requests', fields(translated), masked);
 }
 
 export function makeUnitBatch(locale, units) {
-  const content = { version: 1, translation_version: VERSION, locale,
+  const content = { version: 1, translation_version: VERSION, protection_version: REQUESTS_PROTECTION_VERSION, locale,
     units: [...units].map(([hash, text], index) => ({
-      id: index + 1, source_hash: hash, text: protect(fields(text)).fields.title_en,
+      id: index + 1, source_hash: hash, text: protect(fields(text), 'requests').fields.title_en,
     })) };
   return { ...content, batch_id: sourceHash(content) };
 }
 
 export function importUnitBatch(cache, units, batch, response) {
   const { batch_id, ...content } = batch;
-  if (batch.version !== 1 || batch.translation_version !== VERSION || batch.locale !== cache.locale ||
+  if (batch.version !== 1 || batch.translation_version !== VERSION ||
+      batch.protection_version !== REQUESTS_PROTECTION_VERSION || batch.locale !== cache.locale ||
       batch_id !== sourceHash(content) || response.batch_id !== batch_id) throw Error('Unit batch identity mismatch');
   if (!Array.isArray(response.units) || response.units.length !== batch.units.length) throw Error('Incomplete unit batch');
   const requested = new Map(batch.units.map(unit => [unit.id, unit])), additions = {}, seen = new Set();
@@ -50,13 +58,14 @@ export function importUnitBatch(cache, units, batch, response) {
     const request = requested.get(unit.id), source = units.get(request?.source_hash);
     if (!source || seen.has(unit.id)) throw Error('Unknown/duplicate unit');
     seen.add(unit.id);
-    const masked = protect(fields(source));
+    const masked = protect(fields(source), 'requests');
     if (sourceHash(source) !== request.source_hash || request.text !== masked.fields.title_en) throw Error('Stale unit source');
     const text = restore('requests', fields(unit.text), masked).title_en;
     validateText(source, text);
-    additions[request.source_hash] = { source_hash: request.source_hash, translation_version: VERSION, text };
+    additions[request.source_hash] = { source_hash: request.source_hash, translation_version: VERSION,
+      protection_version: REQUESTS_PROTECTION_VERSION, text };
   }
-  return { ...cache, entries: { ...cache.entries, ...additions } };
+  return { ...cache, protection_version: REQUESTS_PROTECTION_VERSION, entries: { ...cache.entries, ...additions } };
 }
 
 function atomicJSON(file, value) {
@@ -66,15 +75,40 @@ function atomicJSON(file, value) {
   fs.renameSync(pending, file);
 }
 
-export function readTextCache(file, locale, units) {
+export function readTextCache(file, locale, units, { upgrade = false } = {}) {
   const cache = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) :
-    { version: 1, locale, translation_version: VERSION, entries: {} };
+    { version: 1, locale, translation_version: VERSION, protection_version: REQUESTS_PROTECTION_VERSION, entries: {} };
   if (cache.version !== 1 || cache.locale !== locale || cache.translation_version !== VERSION ||
       !cache.entries || typeof cache.entries !== 'object' || Array.isArray(cache.entries)) throw Error('Invalid text cache identity');
+  const legacy = cache.protection_version === undefined || cache.protection_version === 1;
+  if (cache.protection_version !== REQUESTS_PROTECTION_VERSION && !(legacy && upgrade)) {
+    throw Error('Outdated/unknown protection version; explicitly use --upgrade-protection for a legacy cache');
+  }
+  const rejected = [];
   for (const [id, entry] of Object.entries(cache.entries)) {
     if (!/^[a-f0-9]{64}$/.test(id) || entry.source_hash !== id || entry.translation_version !== VERSION ||
         typeof entry.text !== 'string') throw Error('Invalid text cache entry');
-    if (units.has(id)) validateText(units.get(id), entry.text);
+    if (!legacy && entry.protection_version !== REQUESTS_PROTECTION_VERSION) throw Error('Invalid entry protection version');
+    if (units.has(id)) {
+      if (legacy) validateText(units.get(id), entry.text, true);
+      try { validateText(units.get(id), entry.text); }
+      catch (error) {
+        if (!legacy) throw error;
+        rejected.push(id);
+        delete cache.entries[id];
+        continue;
+      }
+    } else if (legacy) {
+      // Unknown old strings cannot be certified against the current source.
+      delete cache.entries[id];
+      continue;
+    }
+    entry.protection_version = REQUESTS_PROTECTION_VERSION;
+  }
+  if (legacy) {
+    cache.protection_version = REQUESTS_PROTECTION_VERSION;
+    cache.protection_upgrade = { from: 1, to: REQUESTS_PROTECTION_VERSION,
+      retained: Object.keys(cache.entries).length, rejected };
   }
   return cache;
 }
@@ -87,13 +121,13 @@ export function materialize(records, cache, overlay) {
       if (!text.trim()) translated[key] = text;
       else {
         const entry = cache.entries[sourceHash(text)];
-        if (entry?.translation_version !== VERSION) break;
+        if (entry?.translation_version !== VERSION || entry.protection_version !== REQUESTS_PROTECTION_VERSION) break;
         translated[key] = entry.text;
       }
     }
     if (Object.keys(translated).length === Object.keys(record.fields).length) {
       candidate.entries[record.id] = { source_hash: record.source_hash, translation_version: VERSION, fields: translated };
-    }
+    } else delete candidate.entries[record.id];
   }
   return candidate;
 }
@@ -125,10 +159,12 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
     timeout: { type: 'string', default: '240' }, retries: { type: 'string', default: '2' },
     'reasoning-effort': { type: 'string', default: 'low' }, 'check-only': { type: 'boolean', default: false },
     'require-complete': { type: 'boolean', default: false },
+    'upgrade-protection': { type: 'boolean', default: false },
   } });
   const locales = v.locale === 'all' ? LOCALES : [v.locale];
   if (locales.some(locale => !LOCALES.includes(locale))) throw Error('Invalid locale');
   if (!v['check-only'] && !v.model) throw Error('Explicit hosted model required');
+  if (v['check-only'] && v['upgrade-protection']) throw Error('Protection upgrade requires a writable run');
   const workers = positive(v.workers, 'workers', 8), size = positive(v['batch-size'], 'batch-size', 100);
   const deadline = Date.now() + positive(v.minutes, 'minutes', 300) * 60000;
   const budget = positive(v.entries, 'entries', 100000), timeout = positive(v.timeout, 'timeout', 600) * 1000;
@@ -139,7 +175,8 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   const lock = `${path.resolve(v.store)}.lock`;
   fs.mkdirSync(lock);
   atomicJSON(path.join(lock, 'owner.json'), { pid: process.pid, started: new Date().toISOString() });
-  const report = { version: 1, translation_version: VERSION, model: v.model, records: records.length,
+  const report = { version: 1, translation_version: VERSION, protection_version: REQUESTS_PROTECTION_VERSION,
+    model: v.model, records: records.length, protection_upgrade: {},
     started: new Date().toISOString(), workers, batch_size: size, entry_budget: budget,
     reasoning_effort: v['reasoning-effort'], time_budget_minutes: Number(v.minutes),
     unique_strings: units.size, snapshot_hash: sourceHash(records.map(({ id, source_hash }) => ({ id, source_hash }))),
@@ -164,7 +201,17 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   try {
     for (const locale of locales) {
       const file = path.join(v.store, 'text-cache', `${locale}.json`);
-      const cache = readTextCache(file, locale, units);
+      const cache = readTextCache(file, locale, units, { upgrade: v['upgrade-protection'] });
+      if (cache.protection_upgrade) report.protection_upgrade[locale] = {
+        retained: cache.protection_upgrade.retained, rejected: cache.protection_upgrade.rejected.length };
+      if (v['upgrade-protection']) {
+        const backup = path.join(v.store, 'cache-backups', 'protection-v1', `${locale}.json`);
+        if (fs.existsSync(file) && !fs.existsSync(backup)) {
+          fs.mkdirSync(path.dirname(backup), { recursive: true });
+          fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+        }
+        atomicJSON(file, cache);
+      }
       states.set(locale, { file, cache, overlay: readOverlay(v.store, 'requests', locale) });
       const pending = [...units].filter(([id]) => !cache.entries[id]);
       for (let i = 0; i < pending.length; i += size) queue.push({ locale, offset: i, rows: pending.slice(i, i + size) });

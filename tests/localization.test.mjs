@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  canonical, sourceHash, recordsFromColumns, protect, restore, emptyOverlay, makeBatch,
+  canonical, sourceHash, recordsFromColumns, protect, restore, emptyOverlay, makeBatch, REQUESTS_PROTECTION_VERSION,
   importBatch, persistBatch, coverage, readOverlay, writeOverlay, validateOverlay, readSourceRecords,
 } from '../scripts/localization.mjs';
 import { main, callCopilot, translationPrompt } from '../scripts/localize.mjs';
@@ -253,7 +253,7 @@ test('Requests text cache deduplicates fields and topics with source/version/tok
   assert.throws(() => importUnitBatch(empty, new Map([...units].map(([id]) => [id, 'changed'])), batch, response), /Stale/);
   const changed = records.map(record => ({ ...record, fields: { ...record.fields, para: 'Changed summary.' },
     source_hash: sourceHash({ ...record.fields, para: 'Changed summary.' }) }));
-  assert.equal(coverage(changed, materialize(changed, cache, overlay)).stale, 2);
+  assert.equal(coverage(changed, materialize(changed, cache, overlay)).missing, 2);
 });
 
 test('portable Requests text cache rejects changed protected tokens and versions', () => {
@@ -379,4 +379,65 @@ test('Requests failed text-cache write cannot produce successful topic coverage'
     assert.equal(process.exitCode, 1);
     assert.deepEqual(readOverlay(store, 'requests', 'fr').entries, {});
   } finally { process.exitCode = oldExitCode; rmSync(root, { recursive: true }); }
+});
+
+test('Requests protect bare commands, APIs, directives and constants without changing Tips masking', () => {
+  const text = 'Use SET DATABASE LOCALIZATION and ds.People.query(), #DECLARE, Compiler_Constants, KEEP and KEEP.';
+  const fields = { title_en: text, line: '', para: '' }, masked = protect(fields, 'requests');
+  for (const token of ['SET DATABASE LOCALIZATION', 'ds.People.query()', '#DECLARE', 'Compiler_Constants']) {
+    assert.equal(masked.tokens.some(item => item.text === token), true);
+  }
+  assert.deepEqual(restore('requests', masked.fields, masked), fields);
+  assert.equal(protect({ headline: text, body: text }).tokens.length, 0);
+  const prose = protect({ title_en: 'A SQL query; I CALL FORM. Visit https://example.com/SET_DATABASE and use 4D Write Pro.',
+    line: '', para: '' }, 'requests');
+  assert.equal(prose.fields.title_en.startsWith('A __KEEP_'), true);
+  assert.equal(prose.fields.title_en.includes('; I __KEEP_'), true);
+  assert.equal(prose.tokens.some(token => token.text === 'A SQL' || token.text === 'I CALL FORM'), false);
+  for (const token of ['SQL', 'CALL FORM', 'https://example.com/SET_DATABASE', '4D Write Pro']) {
+    assert.equal(prose.tokens.some(item => item.text === token), true);
+  }
+  const units = new Map([[sourceHash(text), text]]), batch = makeUnitBatch('fr', units);
+  const cache = importUnitBatch({ locale: 'fr', entries: {} }, units, batch,
+    { batch_id: batch.batch_id, units: batch.units });
+  assert.equal(cache.entries[sourceHash(text)].protection_version, REQUESTS_PROTECTION_VERSION);
+  const legacy = { ...batch, protection_version: undefined };
+  assert.throws(() => importUnitBatch(cache, units, legacy,
+    { batch_id: legacy.batch_id, units: legacy.units }), /identity/);
+  const source = recordsFromColumns('requests', { ids: [1], title_en: [text], line: [''], para: [''] });
+  const topicBatch = makeBatch('requests', 'fr', source);
+  delete topicBatch.protection_version;
+  assert.throws(() => importBatch(emptyOverlay('requests', 'fr'), source, topicBatch,
+    { batch_id: topicBatch.batch_id, records: topicBatch.records }), /protection version/);
+});
+
+test('Requests protection upgrade retains certified strings and invalidates only changed command tokens', () => {
+  const root = mkdtempSync(path.join(testRoot, 'requests-upgrade-'));
+  try {
+    const changed = 'Use SET DATABASE LOCALIZATION with 4D.', safe = 'Read ds.People.query().';
+    const units = new Map([[sourceHash(changed), changed], [sourceHash(safe), safe]]);
+    const file = path.join(root, 'cache.json');
+    const legacy = { version: 1, locale: 'fr', translation_version: '1', entries: {
+      [sourceHash(changed)]: { source_hash: sourceHash(changed), translation_version: '1',
+        text: 'Utilisez une commande de localisation avec 4D.' },
+      [sourceHash(safe)]: { source_hash: sourceHash(safe), translation_version: '1',
+        text: 'Lisez ds.People.query().' },
+    } };
+    writeFileSync(file, JSON.stringify(legacy));
+    assert.throws(() => readTextCache(file, 'fr', units), /upgrade-protection/);
+    const upgraded = readTextCache(file, 'fr', units, { upgrade: true });
+    assert.equal(upgraded.protection_version, REQUESTS_PROTECTION_VERSION);
+    assert.equal(upgraded.protection_upgrade.retained, 1);
+    assert.deepEqual(upgraded.protection_upgrade.rejected, [sourceHash(changed)]);
+    assert.equal(upgraded.entries[sourceHash(changed)], undefined);
+    assert.equal(upgraded.entries[sourceHash(safe)].text, 'Lisez ds.People.query().');
+    const records = recordsFromColumns('requests', { ids: [1], title_en: [''], line: [changed], para: [safe] });
+    const old = emptyOverlay('requests', 'fr');
+    old.entries[1] = { source_hash: records[0].source_hash, translation_version: '1', fields: records[0].fields };
+    assert.equal(coverage(records, old).current, 1);
+    assert.equal(coverage(records, materialize(records, upgraded, old)).missing, 1);
+    legacy.entries[sourceHash(changed)].text = 'Lost original protected product token.';
+    writeFileSync(file, JSON.stringify(legacy));
+    assert.throws(() => readTextCache(file, 'fr', units, { upgrade: true }), /protected token/);
+  } finally { rmSync(root, { recursive: true }); }
 });

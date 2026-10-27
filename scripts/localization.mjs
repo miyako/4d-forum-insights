@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const VERSION = '1';
+export const REQUESTS_PROTECTION_VERSION = 2;
 export const LOCALES = ['fr', 'ja'];
 export const PAGES = ['voices', 'tips', 'requests'];
 export const FIELDS = { tips: ['headline', 'body'], voices: ['question', 'positions', 'outcome'],
@@ -75,12 +76,17 @@ export function validateShape(page, fields, source) {
 }
 
 // Mask code, links and technical identifiers before translation, then restore them verbatim.
-const PROTECTED = /```[\s\S]*?```|`[^`\n]+`|https?:\/\/[^\s<>")]*|\{[A-Za-z_][\w.]*\}|%[sdif]|\$\w+(?:\.\w+|\[(?:"[^"\n]*"|'[^'\n]*'|\d+)\])*|\b(?:4D(?: Write Pro| View Pro| Internet Commands| Server| Mobile| REST API)?|ORDA|Qodly|SQL|JSON|XML|HTTP[S]?|API|macOS|Windows|Linux|JavaScript|TypeScript)\b|`/g;
-export function protect(fields) {
+const VERBATIM = /```[\s\S]*?```|`[^`\n]+`|https?:\/\/[^\s<>")]*/;
+const PROTECTED = new RegExp(`${VERBATIM.source}|` +
+  /\{[A-Za-z_][\w.]*\}|%[sdif]|\$\w+(?:\.\w+|\[(?:"[^"\n]*"|'[^'\n]*'|\d+)\])*|\b(?:4D(?: Write Pro| View Pro| Internet Commands| Server| Mobile| REST API)?|ORDA|Qodly|SQL|JSON|XML|HTTP[S]?|API|macOS|Windows|Linux|JavaScript|TypeScript)\b|`/.source, 'g');
+const REQUEST_IDENTIFIERS = /#[A-Za-z_]\w*|\b(?!e\.g\b|i\.e\b)[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([^()\n]*\))?|\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b(?:[A-Z][A-Z0-9_]{1,}[ \t]+)+[A-Z][A-Z0-9_]{1,}\b|\b[A-Z][A-Z0-9_]{1,}\b/;
+const REQUEST_PROTECTED = new RegExp(
+  `${VERBATIM.source}|${REQUEST_IDENTIFIERS.source}|${PROTECTED.source}`, 'g');
+export function protect(fields, page) {
   const tokens = [];
   const mask = text => {
     if (/__KEEP_\d+__/.test(text)) throw Error('Reserved placeholder in source');
-    return text.replace(PROTECTED, text => {
+    return text.replace(page === 'requests' ? REQUEST_PROTECTED : PROTECTED, text => {
       const marker = `__KEEP_${tokens.length}__`;
       tokens.push({ marker, text });
       return marker;
@@ -157,8 +163,9 @@ export function coverage(records, overlay) {
 export function makeBatch(page, locale, records) {
   const batch = {
     version: 1, translation_version: VERSION, page, locale,
+    ...(page === 'requests' ? { protection_version: REQUESTS_PROTECTION_VERSION } : {}),
     records: records.map(record => {
-      const masked = protect(record.fields);
+      const masked = protect(record.fields, page);
       restore(page, masked.fields, masked);
       return { id: record.id, source_hash: record.source_hash, fields: masked.fields };
     }),
@@ -170,6 +177,9 @@ export function importBatch(overlay, sourceRecords, batch, response) {
   if (batch.version !== 1 || batch.page !== overlay.page || batch.locale !== overlay.locale ||
       batch.translation_version !== VERSION || !Array.isArray(batch.records)) {
     throw Error('Batch identity mismatch');
+  }
+  if (batch.page === 'requests' && batch.protection_version !== REQUESTS_PROTECTION_VERSION) {
+    throw Error('Requests protection version mismatch');
   }
   if (!Array.isArray(response.records) || response.records.length !== batch.records.length) {
     throw Error('Translation batch incomplete');
@@ -186,7 +196,7 @@ export function importBatch(overlay, sourceRecords, batch, response) {
     const responseBound = translated.source_hash === undefined || translated.source_hash === source?.source_hash;
     if (!source || !request || additions[translated.id] || !responseBound ||
         request.source_hash !== source.source_hash) throw Error('Unknown, duplicate or stale translation ID/hash');
-    const masked = protect(source.fields);
+    const masked = protect(source.fields, overlay.page);
     if (canonical(request.fields) !== canonical(masked.fields)) throw Error('Changed source batch fields');
     const fields = restore(overlay.page, translated.fields, masked);
     additions[translated.id] = { source_hash: source.source_hash, translation_version: VERSION, fields };
