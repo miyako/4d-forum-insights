@@ -11,7 +11,7 @@ Main features:
   - Words are ANDed, falling back to OR when nothing matches.
   - `-word` excludes a word, and `"quoted phrases"` must match verbatim.
   - Diacritics are folded, and Japanese/Chinese text is matched with CJK bigrams.
-- **Semantic search** with no LLM: the query is embedded in the browser by a small sentence-embedding model (transformers.js, bge-small, about 34 MB, cached by the browser) and compared with precomputed int8 topic embeddings.
+- **Multilingual semantic search** with no generative LLM: the query is embedded lazily in the browser by text-only EmbeddingGemma 2 and compared with shared English topic vectors. The first download is about 207 MB on WebGPU (q4), or 575 MB for the tested WASM fallback (fp16), plus runtime; downloads are cached by the browser. Keyword search and filters do not wait for it. See [embedding setup](docs/embeddings.md).
 - **Hybrid search** combines keyword and semantic rankings with reciprocal-rank fusion.
   - The semantic model is loaded lazily, so keyword search never waits for it.
 - **Filters**, built from the question manifest:
@@ -29,6 +29,7 @@ Main features:
 - **Card and table views**, and a mobile layout.
 - **Tips** (`/tips/`): a knowledge base of answered questions and shared know-how, rewritten by a local model into short question + answer entries, by area (Language, Interface, Database, Web & network, Administration, 4D Write Pro, 4D View Pro, Third party, Other), with keyword, semantic and hybrid search. See [docs/tips.md](docs/tips.md).
 - **Voices** (`/voices/`): threads where the community weighed in, with the question at stake, the views that came up and how it ended. No usernames are shown. See [docs/voices.md](docs/voices.md).
+- **EN / FR / JA** display languages on Tips and Voices, including translated generated entries, localized labels and shareable language state. English remains canonical; missing/stale translations are explicitly marked as English. [Translation checkpoints and hosted setup](docs/localization.md).
 - **Light, dark or Auto theme**. Auto follows the OS and is the default. The choice is kept in localStorage and applied before first paint, so the page never flashes the wrong theme.
 
 Only titles, machine-translated titles, model-written summaries, metadata, model answers and links are published.
@@ -43,7 +44,7 @@ flowchart LR
     DB -->|enrich: gemma-4-E4B<br/>translate + summarise| DB
     DB -->|classify: Kev-4B<br/>/v1/systemone| DB
     DB -->|scripts/build_data.py<br/>read-only| D[site/data<br/>manifest + topics + answers]
-    D -->|scripts/build_embeddings.mjs<br/>bge-small, int8| E[embeddings.bin]
+    D -->|scripts/build_embeddings.mjs<br/>EmbeddingGemma 2, 256d int8| E[embeddings.bin]
   end
   D & E -->|site-data.tar.gz<br/>release asset| P[GitHub Pages]
   P --> B[Browser<br/>MiniSearch + transformers.js]
@@ -58,6 +59,7 @@ flowchart LR
 | `config/tips.json` | The `/tips/` page: labels for areas and types, presets, the area threshold, preferred run. |
 | `scripts/build_data.py` | Exports the published data from `forum.db`, opened read-only. |
 | `scripts/build_embeddings.mjs` | Builds the quantised topic embeddings, incrementally. |
+| `scripts/localize.mjs`, `localization/` | Resumable frontier-model translation and portable seed overlays, independent of the encrypted DB. |
 | `scripts/db-store.sh` | Pulls/pushes the delta workflow's encrypted working DB. |
 | `pipeline/` | A vendored copy of the `fminer` pipeline plus the `delta` command (see `pipeline/README.md`). |
 | `.github/workflows/pages.yml` | Deploys the site with `actions/deploy-pages`. |
@@ -75,7 +77,7 @@ All files are in `site/data/` and are referenced from `manifest.json` with conte
 | `text.json` | 2.2 MB (0.7 MB gzipped) | Summary paragraphs aligned with the rows. Loaded after first paint and then added to the index. |
 | `answers/<run>.json` | 20–500 KB | One file per model + prompt_version run: `{ids, keys, answers: {question: column}}`. Scores and probabilities are integers (score×100, permille). |
 | `tips/answers/<run>.json`, `tips/entries.json` | est. ~1 MB + ~3.5 MB (0.4 + 1.3 MB gzipped) for the full run | The `/tips/` knowledge base: area + Q&A type per topic, and the written entries. See [docs/tips.md](docs/tips.md). |
-| `embeddings.bin` | ~6.5 MB | N × 384 int8 vectors (scaled per vector), plus `embeddings-ids.json`. Loaded only when semantic or hybrid search is used. |
+| `embeddings.bin` | ~4.36 MB | N × 256 int8 Matryoshka-truncated, renormalized vectors, plus `embeddings-ids.json`. Loaded only when semantic or hybrid search is used. |
 
 Why MiniSearch over JSON instead of SQLite in the browser? With about 17k small records, the slim JSON compresses to about 2.4 MB in total. An in-memory index then gives instant faceting, and every facet count updates as you type. sql.js would add about 1 MB of wasm, and sql.js-httpvfs is only worth it for much larger datasets.
 
@@ -95,10 +97,12 @@ make publish    # upload site-data.tar.gz to the "data" release and redeploy Pag
 - `make data` runs `scripts/build_data.py`.
   - It works on partial data: unenriched topics fall back to their original title, and unclassified topics are shown as "not classified".
 - `make embeddings` embeds every topic that is new or whose text changed.
-  - Vectors are cached by text hash in the published files, so reruns are incremental.
-  - The full 17k run takes about 20 minutes on a laptop CPU with 2 threads; set `EMBED_THREADS` to change that.
+  - Vectors are cached by text and complete embedding identity, so reruns are incremental. Changing models or dimensions requires rebuilding every vector; old bge vectors cannot be mixed in.
+  - Text-only EmbeddingGemma 2 is larger than the previous bge model; do not assume the previous 20-minute timing applies. Set `EMBED_THREADS` to control CPU threads.
   - `make embeddings-sample` embeds a deterministic 400-topic sample for development.
 - `make test` runs the unit tests.
+- `python3 -m unittest discover -s tests -p 'test_publish_data.py'` checks publication locking,
+  delayed localization merges and cross-runtime source hashes without contacting GitHub.
 
 Enriched topics are embedded with their English title, summary line, summary paragraph and tags. Topics that are not yet enriched use their title and opening text; that text is only used locally and is never published.
 

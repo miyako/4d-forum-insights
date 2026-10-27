@@ -45,11 +45,18 @@
     }
   ],
   "embeddings": {
-    "model": "Xenova/bge-small-en-v1.5",
-    "pooling": "cls",
-    "query_prefix": "Represent this sentence for searching relevant passages: ",
-    "doc_dtype": "fp32",
-    "query_dtype": "q8",
-    "quant": "int8"
+    "model": "onnx-community/embeddinggemma-2-ONNX",
+    "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+    "dim": 256,
+    "pooling": "sentence_embedding",
+    "document_template": "title: {title} | text: {content}",
+    "query_prefix": "task: search result | query: ",
+    "doc_dtype": "q4",
+    "query_dtype": "q4",
+    "query_wasm_dtype": "fp16",
+    "quant": "int8",
+    "max_length": 2048,
+    "model_download_bytes": 206696682,
+    "wasm_model_download_bytes": 574688040
   }
 }

@@ -1,0 +1,177 @@
+name: Localize summaries
+
+on:
+  repository_dispatch:
+    types: [english-data-published]
+  workflow_dispatch:
+    inputs:
+      page:
+        description: 'Summary view'
+        type: choice
+        options: [all, tips, voices]
+        default: all
+      locale:
+        description: 'Target locale'
+        type: choice
+        options: [all, fr, ja]
+        default: all
+      entries:
+        description: 'Maximum entries attempted (1–1000)'
+        default: '100'
+      minutes:
+        description: 'Translation time budget (1–40 minutes)'
+        default: '20'
+      batch_size:
+        description: 'Entries per model request (1–50)'
+        default: '20'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: localization
+  cancel-in-progress: false
+
+jobs:
+  localize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    outputs:
+      runner_outcome: ${{ steps.translate.outcome }}
+    steps:
+      # Ignore dispatch payloads; never execute code or consume artifacts from a PR head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Validate configuration and bounded inputs
+        env:
+          LOCALIZATION_MODEL: ${{ vars.LOCALIZATION_MODEL }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          ENTRY_BUDGET: ${{ inputs.entries || '100' }}
+          MINUTE_BUDGET: ${{ inputs.minutes || '20' }}
+          BATCH_SIZE: ${{ inputs.batch_size || '20' }}
+          TARGET_PAGE: ${{ inputs.page || 'all' }}
+          TARGET_LOCALE: ${{ inputs.locale || 'all' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          for name, maximum in (("ENTRY_BUDGET", 1000), ("MINUTE_BUDGET", 40), ("BATCH_SIZE", 50)):
+              value = os.environ[name]
+              if not value.isascii() or not value.isdigit() or not 1 <= int(value) <= maximum:
+                  raise SystemExit(f"{name} must be an integer from 1 to {maximum}")
+          if os.environ["TARGET_PAGE"] not in ("all", "tips", "voices"):
+              raise SystemExit("Invalid page")
+          if os.environ["TARGET_LOCALE"] not in ("all", "fr", "ja"):
+              raise SystemExit("Invalid locale")
+          for name in ("LOCALIZATION_MODEL", "COPILOT_GITHUB_TOKEN"):
+              if not os.environ.get(name, "").strip():
+                  raise SystemExit(f"Configure repository {'variable' if name == 'LOCALIZATION_MODEL' else 'secret'} {name}; no fallback model/auth")
+          PY
+
+      - name: Install verified hosted translator CLI
+        run: npm install --global @github/copilot@1.0.104 --no-audit --no-fund
+
+      - name: Fetch current English and optional overlays
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/published site/data
+          gh release download data --pattern site-data.tar.gz --dir build/published
+          tar -xzf build/published/site-data.tar.gz -C site
+          # An absent asset is expected on the first run; other download failures must surface.
+          assets=$(gh release view data --json assets --jq '.assets[].name')
+          if printf '%s\n' "$assets" | grep -qx localization.tar.gz; then
+            gh release download data --pattern localization.tar.gz --dir build/published
+          fi
+
+      - name: Merge optional seeds and released overlays
+        id: prepare
+        run: |
+          python3 scripts/publish_data.py prepare-localization \
+            --data site/data --seeds localization --store build/localization \
+            --archive build/published/localization.tar.gz
+
+      - name: Translate bounded incremental batches
+        id: translate
+        continue-on-error: true
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          LOCALIZATION_MODEL: ${{ vars.LOCALIZATION_MODEL }}
+          LOCALIZATION_REASONING_EFFORT: ${{ vars.LOCALIZATION_REASONING_EFFORT }}
+          ENTRY_BUDGET: ${{ inputs.entries || '100' }}
+          MINUTE_BUDGET: ${{ inputs.minutes || '20' }}
+          BATCH_SIZE: ${{ inputs.batch_size || '20' }}
+          TARGET_PAGE: ${{ inputs.page || 'all' }}
+          TARGET_LOCALE: ${{ inputs.locale || 'all' }}
+        run: |
+          node scripts/localize.mjs --data site/data --store build/localization \
+            --page "$TARGET_PAGE" --locale "$TARGET_LOCALE" --model "$LOCALIZATION_MODEL" \
+            --batch-size "$BATCH_SIZE" --entries "$ENTRY_BUDGET" --minutes "$MINUTE_BUDGET" \
+            --workers 1 --timeout 180 --retries 2 --report build/localization-report.json
+
+      - name: Publish retained successful batches and deploy
+        if: >-
+          always() && !cancelled() && steps.prepare.outcome == 'success' &&
+          (steps.translate.outcome == 'success' || steps.translate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/publish_data.py publish-localization --store build/localization --deploy
+
+      - name: Coverage and outcome summary
+        if: always()
+        env:
+          RUNNER_OUTCOME: ${{ steps.translate.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          lines = ["### Localization", f"Translator outcome: {os.environ['RUNNER_OUTCOME'] or 'not started'}"]
+          report = Path("build/localization-report.json")
+          if report.is_file():
+              data = json.loads(report.read_text())
+              lines += [f"Attempted: {data.get('requested', 0)}; translated: {data.get('translated', 0)}; errors: {len(data.get('errors', []))}",
+                        "", "| Locale/view | Current | Stale | Missing | Total |",
+                        "|---|---:|---:|---:|---:|"]
+              for key, value in data.get("coverage", {}).items():
+                  lines.append(f"| {key} | {value['current']} | {value['stale']} | {value['missing']} | {value['total']} |")
+          else:
+              lines += ["No coverage report: configuration, authentication, setup, or source preparation failed."]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain partial checkpoints and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: localization-progress
+          path: |
+            build/localization/
+            build/localization-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  translation-status:
+    name: Translation status
+    needs: localize
+    if: always() && needs.localize.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail explicitly for translator or infrastructure errors
+        env:
+          JOB_RESULT: ${{ needs.localize.result }}
+          RUNNER_OUTCOME: ${{ needs.localize.outputs.runner_outcome }}
+        run: |
+          if [ "$JOB_RESULT" != success ] || [ "$RUNNER_OUTCOME" != success ]; then
+            echo "::error::Localization did not complete cleanly (job=$JOB_RESULT, translator=$RUNNER_OUTCOME). Successful batches were retained; inspect coverage and logs."
+            exit 1
+          fi

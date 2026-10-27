@@ -4,6 +4,12 @@
 the views that came up and how the discussion ended. Like Forum Tips, it is built from public threads and links
 to each one. It never shows usernames or post text.
 
+EN / FR / JA display languages cover the interface and generated question, positions and outcome. They do
+not change the original source-thread language, selection, scores, position order or anonymity. English
+remains canonical, and missing/outdated overlays have an explicit English fallback. The locale is shareable
+in page links. See [localization checkpoints and hosted setup](localization.md); these translations use only
+the published anonymous write-ups, not raw posts or the encrypted DB.
+
 ## Selection
 
 1. **Candidates (metadata only).** These are threads with at least 6 posts, at least 5 participants, and at

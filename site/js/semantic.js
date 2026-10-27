@@ -1,6 +1,7 @@
 // Semantic search: precomputed, quantised topic embeddings + a query embedded in the browser by
 // transformers.js (in a Web Worker). Everything is loaded lazily, only when semantic search is used.
 import { dataUrl } from './data.js';
+import { embeddingIdentity, TRANSFORMERS_VERSION } from './embed-worker.js';
 
 export class Semantic {
   constructor(meta) {
@@ -14,15 +15,20 @@ export class Semantic {
     this.seq = 0;
   }
 
-  get available() { return !!this.meta; }
+  get available() {
+    const m = this.meta;
+    return !!m && m.dim === 256 && m.quant === 'int8' && m.pooling === 'sentence_embedding'
+      && m.transformers_version === TRANSFORMERS_VERSION && m.cache_identity === embeddingIdentity(m);
+  }
 
   /** Load the topic vectors (no model needed: enough for "similar topics"). */
   loadVectors() {
+    if (!this.available) return Promise.reject(new Error('Incompatible embedding index; rebuild embeddings'));
     if (!this.vectorsReady) {
       this.vectorsReady = (async () => {
         const [buf, ids] = await Promise.all([
           fetch(dataUrl(this.meta.bin)).then((r) => { if (!r.ok) throw new Error('embeddings: HTTP ' + r.status); return r.arrayBuffer(); }),
-          fetch(dataUrl(this.meta.ids)).then((r) => r.json()),
+          fetch(dataUrl(this.meta.ids)).then((r) => { if (!r.ok) throw new Error('embedding IDs: HTTP ' + r.status); return r.json(); }),
         ]);
         const { dim, quant } = this.meta;
         const n = ids.length;
@@ -47,13 +53,14 @@ export class Semantic {
 
   /** Start the embedding model in a worker (downloads it on first use; cached by the browser). */
   loadModel() {
+    if (!this.available) return Promise.reject(new Error('Incompatible embedding index; rebuild embeddings'));
     if (!this.modelReady) {
       this.modelReady = new Promise((resolve, reject) => {
         this.worker = new Worker(new URL('./embed-worker.js', import.meta.url), { type: 'module' });
         this.worker.onmessage = (e) => {
           const m = e.data;
           if (m.type === 'progress') this.onProgress(m);
-          else if (m.type === 'ready') resolve();
+          else if (m.type === 'ready') { this.device = m.device; this.dtype = m.dtype; resolve(); }
           else if (m.type === 'error' && m.id == null) reject(new Error(m.error));
           else if (m.id != null && this.pending.has(m.id)) {
             const { res, rej } = this.pending.get(m.id);
@@ -62,7 +69,7 @@ export class Semantic {
           }
         };
         this.worker.onerror = (e) => reject(new Error(e.message || 'embedding worker failed'));
-        this.worker.postMessage({ type: 'init', model: this.meta.model, dtype: this.meta.query_dtype || 'q8' });
+        this.worker.postMessage({ type: 'init', meta: this.meta });
       }).catch((e) => { this.modelReady = null; this.worker?.terminate(); throw e; });
     }
     return this.modelReady;
@@ -77,13 +84,14 @@ export class Semantic {
     const id = ++this.seq;
     return new Promise((res, rej) => {
       this.pending.set(id, { res, rej });
-      this.worker.postMessage({ type: 'embed', id, text: (this.meta.query_prefix || '') + text, pooling: this.meta.pooling || 'mean' });
+      this.worker.postMessage({ type: 'embed', id, text });
     });
   }
 
   /** Cosine similarity of a (normalised) float query vector with every topic vector. */
   scoreAll(q) {
     const { data, inv, ids, dim, quant, rowBytes } = this.vectors;
+    if (q.length !== dim) throw new Error(`Query dimension ${q.length} does not match index dimension ${dim}`);
     const out = new Float32Array(ids.length);
     if (quant === 'binary') {
       for (let r = 0; r < ids.length; r++) {

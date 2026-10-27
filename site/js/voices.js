@@ -4,15 +4,17 @@ import { loadManifest, loadTopics, dataUrl } from './data.js';
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
 import { rrf } from './filter.js';
+import { createLocale, localeOf, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
 import {
   parseVoicesState, serializeVoicesState, buildVoices, debateLevel, voicesPredicates, applyVoices, sortVoices, SORTS,
 } from './voices-core.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const num = new Intl.NumberFormat('en');
-const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-const pct = (p) => `${Math.round(p * 100)}%`;
+const i18n = createLocale(localeOf(location.search));
+const { t: tr, number: num, compact, pct, date: fmtDate } = i18n;
+installLocale(i18n, 'voices');
+const STATE_KEYS = ['q', 'mode', 'subject', 'settled', 'since', 'sort', 'all'];
 const PAGE = 25;
 const SEM_CANDIDATES = 3000;
 
@@ -28,7 +30,10 @@ async function getJSON(rel) {
   return res.json();
 }
 
-const choice = (qid, key) => app.q[qid]?.choices.find((c) => c.key === key) || { key, label: key, long: '' };
+const choice = (qid, key) => {
+  const c = app.q[qid]?.choices.find((c) => c.key === key) || { key, label: key, long: '' };
+  return { ...c, label: tr(c.label), long: tr(c.long) };
+};
 
 // ------------------------------------------------------------------------------------------- boot
 
@@ -36,22 +41,22 @@ async function init() {
   try {
     app.manifest = await loadManifest();
   } catch (e) {
-    return fail(`Could not load data/manifest.json (${esc(e.message)}).`);
+    return fail(esc(tr('Could not load data/manifest.json ({error}).', { error: e.message })));
   }
   const m = app.manifest;
   app.voices = m.voices;
-  if (!app.voices?.entries) return fail('No Forum Voices data yet: run <code>fminer voices-classify</code>, <code>fminer voices-write</code> and <code>make data</code>.');
-  document.title = app.voices.title;
+  if (!app.voices?.entries) return fail(`${tr('No Forum Voices data yet: run')} <code>fminer voices-classify</code>, <code>fminer voices-write</code>, <code>make data</code>.`);
+  document.title = tr(app.voices.title);
   app.state = parseVoicesState(location.search);
   app.q = Object.fromEntries(app.voices.questions.map((q) => [q.id, q]));
 
   const [topics, entries] = await Promise.all([loadTopics(m), getJSON(app.voices.files.entries)]);
-  app.items = buildVoices(entries, topics, app.voices.questions);
+  app.items = await loadOverlay(buildVoices(entries, topics, app.voices.questions), 'voices', i18n.locale, getJSON);
   app.items.forEach((it) => app.byId.set(it.id, it));
 
   app.index = new KeywordIndex(app.items.map((it) => ({
-    id: it.id, title: it.question, title_en: it.topic.title_en || it.topic.title,
-    line: [...it.positions, it.outcome].join(' '), tags: it.topic.tags,
+    id: it.id, title: it.question, title_en: [it.canonicalFields?.question, it.topic.title_en, it.topic.title].filter(Boolean).join(' '),
+    line: [...it.positions, it.outcome, ...(it.canonicalFields?.positions || []), it.canonicalFields?.outcome].filter(Boolean).join(' '), tags: it.topic.tags,
   })));
   app.semantic = new Semantic(m.embeddings);
   app.semantic.onProgress = onModelProgress;
@@ -62,6 +67,7 @@ async function init() {
   if (app.state.mode !== 'kw') startSemantic();
 
   window.addEventListener('popstate', () => {
+    if (localeOf(location.search) !== i18n.locale) return location.reload();
     app.state = parseVoicesState(location.search);
     syncControls();
     update({ history: false });
@@ -125,7 +131,7 @@ function onModelProgress(p) {
   let l = 0, t = 0;
   for (const [a, b] of progress.values()) { l += a; t += b; }
   if (!app.sem.list && t) {
-    showStatus(`Loading the semantic model (first time only): ${(l / 1e6).toFixed(1)} / ${(t / 1e6).toFixed(1)} MB…`
+    showStatus(esc(tr('Loading the semantic model (first time only): {loaded} / {total} MB…', { loaded: i18n.decimal.format(l / 1e6), total: i18n.decimal.format(t / 1e6) }))
       + `<span class="bar"><span style="width:${Math.round((100 * l) / t)}%"></span></span>`, 'info');
   }
 }
@@ -135,9 +141,9 @@ function onModelProgress(p) {
 function update({ replace = false, history = true, keepPage = false } = {}) {
   const s = app.state;
   if (history) {
-    const qs = serializeVoicesState(s);
-    const url = location.pathname + (qs ? '?' + qs : '');
-    if (url !== location.pathname + location.search) (replace ? window.history.replaceState : window.history.pushState).call(window.history, null, '', url);
+    const qs = stateURL(location.search, serializeVoicesState(s), STATE_KEYS, i18n.locale);
+    const url = location.pathname + (qs ? '?' + qs : '') + location.hash;
+    if (url !== location.pathname + location.search + location.hash) (replace ? window.history.replaceState : window.history.pushState).call(window.history, null, '', url);
   }
   if (!keepPage) app.shown = PAGE;
   const { base, relevance, note } = candidates();
@@ -148,28 +154,32 @@ function update({ replace = false, history = true, keepPage = false } = {}) {
   renderSettled(base, preds);
   renderSort(!!relevance, sort);
   renderResults(note);
+  installLocale(i18n, 'voices');
 }
 
 // ------------------------------------------------------------------------------------------- render
 
 function renderStatic() {
   const m = app.manifest;
+  $('#semantic-disclosure').textContent = modelDisclosure(m.embeddings, i18n);
+  $('#semantic-disclosure').hidden = !app.semantic.available;
   const v = app.voices;
   const years = app.items.map((it) => it.topic.created).filter((d) => d != null).map((d) => new Date(d * 864e5).getUTCFullYear());
   const lo = Math.min(...years), hi = Math.max(...years);
-  $('#since').innerHTML = '<option value="0">Any year</option>'
+  $('#since').innerHTML = `<option value="0">${tr('Any year')}</option>`
     + Array.from({ length: hi - lo + 1 }, (_, i) => hi - i).map((y) => `<option value="${y}">${y}+</option>`).join('');
-  $('#presets').innerHTML = '<span class="muted">Try:</span> ' + (v.presets || []).map((p) =>
-    `<a class="preset" href="?${esc(p.params)}" data-params="${esc(p.params)}">${esc(p.label)}</a>`).join('');
-  const removal = v.removal_url ? ` <a href="${esc(v.removal_url)}">Ask for a thread to be removed</a>.` : '';
+  $('#presets').innerHTML = `<span class="muted">${tr('Try:')}</span> ` + (v.presets || []).map((p) =>
+    `<a class="preset" href="${esc(localeURL('?' + p.params, i18n.locale, location.href))}" data-params="${esc(p.params)}">${esc(tr(p.label))}</a>`).join('');
+  const removal = v.removal_url ? ` <a href="${esc(v.removal_url)}">${tr('Ask for a thread to be removed')}</a>.` : '';
   $('#footer').innerHTML = `
-    <p>${esc(v.description)}</p>
-    <p>${num.format(v.entries)} discussions out of ${num.format(v.run.count)} lively threads rated by
-      <code>${esc(v.run.model)}</code> (${esc(v.run.prompt_version)}); summaries written by a local model
-      (${esc(v.run.write_version)}). Participants are never named; the summaries are machine-generated from public
-      threads on <a href="${esc(m.forum_url)}">${esc(m.forum_url.replace(/^https?:\/\//, ''))}</a> and may be wrong or
-      one-sided; the forum posts themselves are not republished.${removal} Data ${esc((m.generated_at || '').slice(0, 10))}.
-      <a href="../">Forum Insights</a> · <a href="../tips/">Forum Tips</a> · <a href="https://github.com/miyako/4d-forum-insights">Source</a></p>`;
+    <p>${esc(tr(v.description))}</p>
+    <p>${esc(tr('{count} discussions out of {total} lively threads rated by', { count: num.format(v.entries), total: num.format(v.run.count) }))}
+      <code>${esc(v.run.model)}</code> (${esc(v.run.prompt_version)}). ${tr('Summaries written by a local model')}
+      (${esc(v.run.write_version)}). ${tr('Participants are never named; the summaries are machine-generated from public threads on')}
+      <a href="${esc(m.forum_url)}">${esc(m.forum_url.replace(/^https?:\/\//, ''))}</a>.
+      ${tr('They may be wrong or one-sided.')} ${tr('The forum posts themselves are not republished.')}${removal}
+      ${tr('Data')} ${esc(dataDate(m.generated_at))}.
+      <a href="../">Forum Insights</a> · <a href="../tips/">${tr('Forum Tips')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
 
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); setQuery($('#q').value); });
   let timer;
@@ -251,11 +261,11 @@ function renderSubjects(base, preds) {
   const counts = new Map();
   for (const it of pool) counts.set(it.subject.key, (counts.get(it.subject.key) || 0) + 1);
   const sel = new Set(app.state.subject);
-  $('#subjects').innerHTML = `<button type="button" class="area${sel.size ? '' : ' active'}" data-subject="" aria-pressed="${!sel.size}">All subjects <span class="n">${num.format(pool.length)}</span></button>`
+  $('#subjects').innerHTML = `<button type="button" class="area${sel.size ? '' : ' active'}" data-subject="" aria-pressed="${!sel.size}">${tr('All subjects')} <span class="n">${num.format(pool.length)}</span></button>`
     + app.q.subject.choices.map((c) => {
       const n = counts.get(c.key) || 0;
       const on = sel.has(c.key);
-      return `<button type="button" class="area${on ? ' active' : ''}${n ? '' : ' zero'}" data-subject="${esc(c.key)}" aria-pressed="${on}" title="${esc(c.long)}">${esc(c.label)} <span class="n">${num.format(n)}</span></button>`;
+      return `<button type="button" class="area${on ? ' active' : ''}${n ? '' : ' zero'}" data-subject="${esc(c.key)}" aria-pressed="${on}" title="${esc(tr(c.long))}">${esc(tr(c.label))} <span class="n">${num.format(n)}</span></button>`;
     }).join('');
 }
 
@@ -265,13 +275,13 @@ function renderSettled(base, preds) {
   for (const it of pool) counts.set(it.settled.key, (counts.get(it.settled.key) || 0) + 1);
   $('#settled').innerHTML = app.q.settled.choices.filter((c) => counts.get(c.key) || app.state.settled.includes(c.key)).map((c) => {
     const on = app.state.settled.includes(c.key);
-    return `<button type="button" class="type settled-${esc(c.key)}${on ? ' active' : ''}" data-settled="${esc(c.key)}" aria-pressed="${on}" title="${esc(c.long)}">${esc(c.label)} <span class="n">${num.format(counts.get(c.key) || 0)}</span></button>`;
+    return `<button type="button" class="type settled-${esc(c.key)}${on ? ' active' : ''}" data-settled="${esc(c.key)}" aria-pressed="${on}" title="${esc(tr(c.long))}">${esc(tr(c.label))} <span class="n">${num.format(counts.get(c.key) || 0)}</span></button>`;
   }).join('');
 }
 
 function renderSort(hasQuery, current) {
   $('#sort').innerHTML = SORTS.filter((o) => !o.needsQuery || hasQuery)
-    .map((o) => `<option value="${o.key}"${o.key === current ? ' selected' : ''}>${o.label}</option>`).join('');
+    .map((o) => `<option value="${o.key}"${o.key === current ? ' selected' : ''}>${tr(o.label)}</option>`).join('');
 }
 
 function highlight(text) {
@@ -282,7 +292,7 @@ function highlight(text) {
   return t.replace(/(^|>)([^<]+)/g, (m, a, b) => a + b.replace(re, '<mark>$1</mark>'));
 }
 
-const fmtDate = (d) => (d == null ? '' : new Date(d * 864e5).toISOString().slice(0, 10));
+const dataDate = (value) => value && Number.isFinite(Date.parse(value)) ? fmtDate(Date.parse(value) / 864e5) : '';
 
 function card(it) {
   const t = it.topic;
@@ -290,27 +300,28 @@ function card(it) {
   const url = `${m.forum_url}/t/${t.slug}/${t.id}`;
   const settled = choice('settled', it.settled.key);
   const subject = choice('subject', it.subject.key);
-  const level = debateLevel(it.debate, app.voices.debate);
-  const span = it.days >= 1 ? ` over ${num.format(it.days)} day${it.days === 1 ? '' : 's'}` : '';
+  const level = debateLevel(it.debate, app.voices.debate.map((label) => tr(label)));
+  const span = it.days >= 1 ? tr(it.days === 1 ? ' over {days} day' : ' over {days} days', { days: num.format(it.days) }) : '';
   return `<article class="voice-card settled-${esc(it.settled.key)}">
     <div class="tip-head">
       <span class="badge badge-${esc(it.settled.key)}" title="${esc(settled.long)} (${pct(it.settled.p)})">${esc(settled.label)}</span>
-      <h2 class="tip-title"><a href="${esc(url)}" target="_blank" rel="noopener">${highlight(it.question)}</a></h2>
+      <h2 class="tip-title" lang="${it.contentLocale || 'en'}"><a href="${esc(url)}" target="_blank" rel="noopener">${highlight(it.question)}</a></h2>
     </div>
-    ${it.positions.length ? `<ul class="positions">${it.positions.map((p) => `<li>${highlight(p)}</li>`).join('')}</ul>` : ''}
-    ${it.outcome ? `<p class="outcome"><span class="outcome-label">Outcome</span> ${highlight(it.outcome)}</p>` : ''}
+    ${it.translationFallback ? `<p class="translation-fallback">${tr('English fallback')}</p>` : ''}
+    ${it.positions.length ? `<ul class="positions" lang="${it.contentLocale || 'en'}">${it.positions.map((p) => `<li>${highlight(p)}</li>`).join('')}</ul>` : ''}
+    ${it.outcome ? `<p class="outcome"><span class="outcome-label">${tr('Outcome')}</span> <span lang="${it.contentLocale || 'en'}">${highlight(it.outcome)}</span></p>` : ''}
     <div class="tip-meta">
-      <a href="?subject=${esc(it.subject.key)}" class="chip area-chip" data-subject-chip="${esc(it.subject.key)}" title="${esc(subject.long)} (${pct(it.subject.p)})">${esc(subject.label)}</a>
-      <span class="chip debate debate-${level.i}" title="How far apart the views are (model estimate)">${esc(level.label)}</span>
-      <span class="meta"><span class="orig-title" title="Thread title">“${esc(t.title_en || t.title)}”</span><span class="dot">·</span>
+      <a href="${esc(localeURL('?subject=' + encodeURIComponent(it.subject.key), i18n.locale, location.href))}" class="chip area-chip" data-subject-chip="${esc(it.subject.key)}" title="${esc(subject.long)} (${pct(it.subject.p)})">${esc(subject.label)}</a>
+      <span class="chip debate debate-${level.i}" title="${tr('How far apart the views are (model estimate)')}">${esc(level.label)}</span>
+      <span class="meta"><span class="orig-title" title="${tr('Thread title')}">${tr('Original title')}: <span lang="${esc(t.lang || 'en')}">“${esc(t.title)}”</span></span><span class="dot">·</span>
         <span>${fmtDate(t.created)}</span><span class="dot">·</span><span>${esc((t.lang || '').toUpperCase())}</span>
-        <span class="dot">·</span><span title="participants">👥 ${num.format(it.participants)}</span>
-        <span class="dot">·</span><span title="replies">💬 ${num.format(Math.max(0, t.posts - 1))}${span}</span>
-        <span class="dot">·</span><span title="views">👁 ${compact.format(t.views)}</span>
+        <span class="dot">·</span><span title="${tr('participants')}">👥 ${num.format(it.participants)}</span>
+        <span class="dot">·</span><span title="${tr('replies')}">💬 ${num.format(Math.max(0, t.posts - 1))}${span}</span>
+        <span class="dot">·</span><span title="${tr('views')}">👁 ${compact.format(t.views)}</span>
       </span>
-      <a class="thread-link" href="${esc(url)}" target="_blank" rel="noopener">Read the thread ↗</a>
+      <a class="thread-link" href="${esc(url)}" target="_blank" rel="noopener">${tr('Read the thread ↗')}</a>
     </div>
-    <details class="why" data-id="${t.id}"><summary>About this summary</summary><div class="why-body"></div></details>
+    <details class="why" data-id="${t.id}"><summary>${tr('About this summary')}</summary><div class="why-body"></div></details>
   </article>`;
 }
 
@@ -318,42 +329,45 @@ function renderWhy(d) {
   const it = app.byId.get(Number(d.dataset.id));
   if (!it) return;
   const v = app.voices;
-  const level = debateLevel(it.debate, v.debate);
+  const level = debateLevel(it.debate, v.debate.map((label) => tr(label)));
   const status = it.ok === 0 ? 'The writer model found no real exchange of views in this thread (hidden unless all=1).'
     : it.ok === 2 ? 'The summary did not pass every format check (length or phrasing).' : 'The summary passed the checks (including: no names).';
-  const removal = v.removal_url ? ` · <a href="${esc(v.removal_url)}${it.id}">Ask for removal</a>` : '';
+  const removal = v.removal_url ? ` · <a href="${esc(v.removal_url)}${it.id}">${tr('Ask for removal')}</a>` : '';
   d.querySelector('.why-body').innerHTML = `
     <dl class="facts">
-      <dt>Debate</dt><dd>${esc(level.label)} (${(it.debate * 4).toFixed(1)} / 4)</dd>
-      <dt>Kind</dt><dd>${esc(choice('exchange', it.exchange).label)}</dd>
-      <dt>Outcome</dt><dd>${esc(choice('settled', it.settled.key).label)} (${pct(it.settled.p)})</dd>
-      <dt>Subject</dt><dd>${esc(choice('subject', it.subject.key).label)} (${pct(it.subject.p)})</dd>
-      <dt>Thread</dt><dd>${num.format(it.participants)} participants, ${num.format(it.returning)} of them posting 3 times or more</dd>
-      <dt>Summary</dt><dd>${esc(status)}</dd>
+      <dt>${tr('Debate')}</dt><dd>${esc(level.label)} (${i18n.decimal.format(it.debate * 4)} / ${num.format(4)})</dd>
+      <dt>${tr('Kind')}</dt><dd>${esc(choice('exchange', it.exchange).label)}</dd>
+      <dt>${tr('Outcome')}</dt><dd>${esc(choice('settled', it.settled.key).label)} (${pct(it.settled.p)})</dd>
+      <dt>${tr('Subject')}</dt><dd>${esc(choice('subject', it.subject.key).label)} (${pct(it.subject.p)})</dd>
+      <dt>${tr('Thread')}</dt><dd>${esc(tr('{people} participants, {returning} of them posting 3 times or more', { people: num.format(it.participants), returning: num.format(it.returning) }))}</dd>
+      <dt>${tr('Summary')}</dt><dd>${esc(tr(status))}</dd>
     </dl>
-    <p class="small">Ratings by <code>${esc(v.run.model)}</code>; the question, views and outcome are written by a local
-      model from the thread and may miss nuances. <a href="../?t=${it.id}">Open in Forum Insights</a>${removal}</p>`;
+    <p class="small">${tr('Ratings by')} <code>${esc(v.run.model)}</code>.
+      ${tr('The question, views and outcome are written by a local model from the thread and may miss nuances.')}
+      <a href="${esc(localeURL('../?t=' + it.id, i18n.locale, location.href))}">${tr('Open in Forum Insights')}</a>${removal}</p>`;
+  localizeDOM(d.querySelector('.why-body'), i18n);
 }
 
 function renderResults(note = app.lastNote || '') {
   app.lastNote = note;
   const s = app.state;
   const total = app.results.length;
-  const scope = s.subject.length ? ` about ${s.subject.map((k) => choice('subject', k).label).join(' + ')}` : '';
-  $('#count').innerHTML = `<strong>${num.format(total)}</strong> ${total === 1 ? 'discussion' : 'discussions'}${esc(scope)}`
-    + (note ? ` <span class="muted small">· ${esc(note)}</span>` : '');
+  const scope = s.subject.length ? tr(' about {scope}', { scope: s.subject.map((k) => choice('subject', k).label).join(' + ') }) : '';
+  $('#count').innerHTML = `<strong>${num.format(total)}</strong> ${tr(total === 1 ? 'discussion' : 'discussions')}${esc(scope)}`
+    + (note ? ` <span class="muted small">· ${esc(tr(note))}</span>` : '');
   if (app.sem.list || !(s.mode !== 'kw' && s.q.trim())) {
     if (!app.sem.error) $('#status').hidden = true;
   }
-  if (app.sem.error && s.mode !== 'kw') showStatus(`Semantic search unavailable: ${esc(app.sem.error)}`, 'warn');
+  if (app.sem.error && s.mode !== 'kw') showStatus(esc(tr('Semantic search unavailable: {error}', { error: app.sem.error })), 'warn');
   if (!total) {
-    $('#results').innerHTML = '<div class="empty">Nothing found. Try other words, the <strong>Semantic</strong> mode, or fewer filters.</div>';
+    $('#results').innerHTML = `<div class="empty">${tr('Nothing found. Try other words, Semantic mode, or fewer filters.')}</div>`;
     $('#more').innerHTML = '';
     return;
   }
   $('#results').innerHTML = app.results.slice(0, app.shown).map(card).join('');
   $('#more').innerHTML = total > app.shown
-    ? `<button type="button" class="btn">Show more (${num.format(total - app.shown)} left)</button>` : '';
+    ? `<button type="button" class="btn">${tr('Show more ({count} left)', { count: num.format(total - app.shown) })}</button>` : '';
+  localizeDOM($('#results'), i18n);
 }
 
 function showStatus(html, kind = 'info') {
@@ -365,5 +379,5 @@ function showStatus(html, kind = 'info') {
 
 init().catch((e) => {
   console.error(e);
-  fail(`Something went wrong: ${esc(e.message)}`);
+  fail(esc(tr('Something went wrong: {error}', { error: e.message })));
 });
