@@ -35,8 +35,8 @@
       <input id="q" type="search" placeholder="Search topics…  ( / )" aria-label="Search topics" spellcheck="false">
       <div class="modes" role="radiogroup" aria-label="Search mode">
         <button type="button" data-mode="kw" role="radio" title="Keyword search (titles, summaries, tags)">Keyword</button>
-        <button type="button" data-mode="hyb" role="radio" title="Keyword + semantic, fused ranking">Hybrid</button>
-        <button type="button" data-mode="sem" role="radio" title="Semantic search (meaning, not words)">Semantic</button>
+        <button type="button" data-mode="hyb" role="radio" title="Keyword + semantic, fused ranking. Text-only EmbeddingGemma 2 downloads about 207 MB on first use (q4 WebGPU), or 575 MB for the fp16 WASM fallback.">Hybrid</button>
+        <button type="button" data-mode="sem" role="radio" title="Search by meaning with text-only EmbeddingGemma 2. First use downloads about 207 MB (q4 WebGPU), or 575 MB for the fp16 WASM fallback.">Semantic</button>
       </div>
     </form>
     <label class="run-select" title="Which model run's answers are used for filters, sorting and chips">
