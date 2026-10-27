@@ -1,5 +1,11 @@
 /* /tips/: knowledge-base page. Reuses style.css (variables, header, toolbar, chips) and adds a single reading column. */
 .tips-logo { background: var(--ok); }
+.tips-page .topbar { flex-wrap: wrap; }
+.tips-page .search { min-width: 260px; }
+.locale-nav { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: .85rem; }
+.locale-nav a { padding: 4px; border-radius: 4px; }
+.locale-nav a[aria-current] { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+.translation-fallback { color: var(--muted); font-size: .8rem; margin: 4px 0; }
 
 .areas, .tips-main { max-width: 980px; margin-left: auto; margin-right: auto; }
 .areas { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 20px 0; }
@@ -52,6 +58,7 @@
 .why-body p { margin: 8px 0 0; }
 
 @media (max-width: 760px) {
+  .tips-page .search { min-width: 0; }
   .areas { padding: 10px 12px 0; }
   .tips-main { padding: 10px 12px 24px; }
   .btn.switch { margin-left: auto; }

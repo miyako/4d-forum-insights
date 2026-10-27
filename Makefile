@@ -12,18 +12,26 @@ FMINER_DB_SRC ?= $(HOME)/4d-feature-miner/data/forum.db
 DB            ?= build/forum.db
 WORK_DB       ?= build/work.db
 RELEASE       ?= data
+ENGLISH_PROVENANCE ?= build/site-data-provenance.json
+CAPTURE_ENGLISH_BASE ?= 1
 PY            := uv run -q --project pipeline python
 PORT          ?= 8000
 KB_DB         ?= $(WORK_DB)
 KB_SAMPLE     ?= 300
 
-.PHONY: all snapshot data embeddings embeddings-sample vendor test serve site-data publish \
+.PHONY: all english-base snapshot data locales embeddings embeddings-sample vendor test serve site-data publish \
         db-pull db-push db-seed delta-local kb kb-pilot kb-stats voices voices-stats clean
 
 all: snapshot data embeddings
 
+## capture once per make invocation BEFORE reading/exporting English; publish never recaptures
+english-base:
+	@if [ "$(CAPTURE_ENGLISH_BASE)" != 0 ]; then \
+	  python3 scripts/publish_data.py capture-english-base --release "$(RELEASE)" --provenance "$(ENGLISH_PROVENANCE)"; \
+	fi
+
 ## copy the live pipeline DB (read-only) into build/forum.db
-snapshot:
+snapshot: english-base
 	@mkdir -p build
 	sqlite3 -readonly "$(FMINER_DB_SRC)" ".backup '$(DB).tmp'"
 	sqlite3 "$(DB).tmp" "PRAGMA journal_mode=DELETE;" >/dev/null
@@ -31,8 +39,15 @@ snapshot:
 	@sqlite3 -readonly "$(DB)" "SELECT 'topics', COUNT(*), 'enriched', COUNT(enriched_at) FROM topics; SELECT 'classifications', COUNT(*) FROM classifications;"
 
 ## export the published data (manifest, topics, text, answers) into site/data
-data:
+data: english-base
 	$(PY) scripts/build_data.py --db "$(DB)"
+	python3 scripts/publish_data.py seal-english-candidate --release "$(RELEASE)" --provenance "$(ENGLISH_PROVENANCE)"
+	$(MAKE) locales
+
+## merge optional local seeds and a downloaded release overlay for local previews
+locales:
+	python3 scripts/publish_data.py prepare-localization --data site/data \
+	  --seeds localization --store site/data/locales --archive build/published/localization.tar.gz
 
 ## embed every new or changed topic (incremental; ~20 min for 17k topics on a laptop CPU)
 embeddings: node_modules
@@ -53,7 +68,7 @@ vendor: node_modules
 test: node_modules
 	npm test
 
-serve:
+serve: locales
 	@echo "http://127.0.0.1:$(PORT)/"
 	python3 -m http.server $(PORT) --bind 127.0.0.1 -d site
 
@@ -63,12 +78,9 @@ site-data:
 	COPYFILE_DISABLE=1 tar -czf build/site-data.tar.gz -C site data
 	@du -h build/site-data.tar.gz
 
-## upload site-data.tar.gz to the "data" release and redeploy Pages
-publish: site-data
-	gh release view $(RELEASE) >/dev/null 2>&1 || gh release create $(RELEASE) --title "Published data" --latest=false \
-	  --notes "Data assets for the site (site-data.tar.gz) and the encrypted pipeline DB. Updated by the delta workflow."
-	gh release upload $(RELEASE) build/site-data.tar.gz --clobber
-	gh workflow run pages.yml
+## publish English data under the shared durable lease, then redeploy Pages
+publish:
+	python3 scripts/publish_data.py publish-site --release "$(RELEASE)" --provenance "$(ENGLISH_PROVENANCE)" --deploy
 
 ## encrypted working DB of the delta workflow (needs DB_KEY)
 db-pull:

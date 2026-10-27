@@ -5,6 +5,13 @@ An answered question becomes a **question + answer**, and shared know-how become
 You can browse the entries by area and search them by keyword, by meaning (semantic), or both (hybrid).
 Every entry links to the original thread.
 
+The EN / FR / JA display-language selector localizes the interface and generated headlines/answers without
+changing source-thread filters or stable links. English is canonical; a missing or outdated translation is
+explicitly marked as English, and original titles/source summaries remain identified. Overlays are
+source-hash/version checked and persisted independently of the encrypted DB. See
+[localization and hosted incremental setup](localization.md). Keyword search includes the selected overlay;
+French accents and Japanese CJK queries do not require downloading the semantic model.
+
 It is the same static site and the same data release as the main page. Nothing runs on a server, and no
 generative model runs at query time.
 

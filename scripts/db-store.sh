@@ -12,10 +12,15 @@
 set -euo pipefail
 cmd=${1:?usage: db-store.sh pull|push [db]}
 db=${2:-build/work.db}
+if [ "$cmd" = push ] && [ "${DATA_PUBLICATION_CHILD:-}" != 1 ]; then
+    exec python3 "$(dirname "$0")/publish_data.py" with-lock -- bash "$0" "$@"
+fi
 tag=${DB_RELEASE:-data}
 asset=forum.db.zst.enc
 : "${DB_KEY:?set DB_KEY (the passphrase used to encrypt the DB asset)}"
-tmp=$(mktemp -d)
+mkdir -p build
+tmp="build/db-store-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+mkdir "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 enc() { openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:DB_KEY "$@"; }
 

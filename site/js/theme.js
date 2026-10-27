@@ -2,6 +2,8 @@
 // The choice is kept in localStorage; the inline script in index.html applies it before first paint.
 // Auto removes data-theme so the prefers-color-scheme media query keeps following the OS live.
 
+import { createLocale } from './locale.js';
+
 const KEY = 'theme';
 const THEMES = ['auto', 'light', 'dark'];
 const LABEL = { auto: 'Auto (follows system)', light: 'Light', dark: 'Dark' };
@@ -37,7 +39,7 @@ function init() {
   const items = [...list.querySelectorAll('[role=menuitemradio]')];
 
   const render = (theme) => {
-    const label = `Color theme: ${LABEL[theme]}`;
+    const label = createLocale(root.lang).t(`Color theme: ${LABEL[theme]}`);
     btn.setAttribute('aria-label', label);
     btn.title = label;
     btn.querySelector('use').setAttribute('href', `#i-${theme}`);

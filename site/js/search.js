@@ -6,13 +6,14 @@ const CJK = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
 const SPLIT = /[\s\p{P}\p{S}]+/u;
 
 export function normalize(term) {
-  return term.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+  // Fold Latin accents, not Japanese dakuten: バ and ハ are different search terms.
+  return term.normalize('NFKC').normalize('NFD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1').normalize('NFC').toLowerCase();
 }
 
 /** Words for Latin scripts; overlapping character bigrams for CJK runs (no spaces between words). */
 export function tokenize(text) {
   const out = [];
-  for (const tok of String(text || '').split(SPLIT)) {
+  for (const tok of String(text || '').normalize('NFKC').split(SPLIT)) {
     if (!tok) continue;
     if (!CJK.test(tok)) { out.push(tok); continue; }
     for (const part of tok.split(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+)/)) {

@@ -102,6 +102,10 @@ jobs:
           (cd pipeline && uv sync -q)
           npm ci --no-audit --no-fund
 
+      - name: Capture English publication base before reading or building
+        if: steps.pre.outputs.ok == 'true'
+        run: python3 scripts/publish_data.py capture-english-base
+
       - name: Pull working DB
         if: steps.pre.outputs.ok == 'true'
         run: |
@@ -162,15 +166,14 @@ jobs:
       - name: Export site data and embeddings
         if: steps.pre.outputs.ok == 'true'
         run: |
-          make snapshot data FMINER_DB_SRC="$WORK_DB"
+          make snapshot data CAPTURE_ENGLISH_BASE=0 FMINER_DB_SRC="$WORK_DB"
           EMBED_THREADS=4 make embeddings
 
       - name: Publish site data
         id: publish
         if: steps.pre.outputs.ok == 'true'
         run: |
-          make site-data
-          gh release upload data build/site-data.tar.gz --clobber
+          python3 scripts/publish_data.py publish-site
           echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Summary

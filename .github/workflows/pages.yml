@@ -6,7 +6,7 @@ name: Deploy Pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'config/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'config/**', 'localization/**', 'scripts/publish_data.py', '.github/workflows/pages.yml']
   workflow_dispatch:
   workflow_call:
 
@@ -29,15 +29,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p site/data
-          if gh release download data --repo "$GITHUB_REPOSITORY" --pattern site-data.tar.gz --dir /tmp; then
-            tar -xzf /tmp/site-data.tar.gz -C site
+          mkdir -p site/data build/published
+          if gh release download data --repo "$GITHUB_REPOSITORY" --pattern site-data.tar.gz --dir build/published; then
+            tar -xzf build/published/site-data.tar.gz -C site
             # the embedding text hashes are only a build cache, not used by the UI
             rm -f site/data/embeddings-hashes.json
             jq -r '"\(.stats.topics) topics, \(.runs | length) runs, embeddings: \(.embeddings.count // 0)"' site/data/manifest.json
           else
             echo "::warning::no site-data.tar.gz on the data release yet; deploying the site without data"
           fi
+          # Localization is optional and cannot prevent English deployment.
+          if ! gh release download data --repo "$GITHUB_REPOSITORY" --pattern localization.tar.gz --dir build/published; then
+            echo "::warning::localization asset unavailable; using optional local seeds or English"
+          fi
+          rm -rf site/data/locales
+          python3 scripts/publish_data.py prepare-localization \
+            --data site/data --seeds localization --store site/data/locales \
+            --archive build/published/localization.tar.gz
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
