@@ -5,6 +5,17 @@ It is a static GitHub Pages site and runs entirely in the browser, with no serve
 
 **Site:** https://miyako.github.io/4d-forum-insights/
 
+The root opens **Voices**. **Requests** lives at [`/requests/`](https://miyako.github.io/4d-forum-insights/requests/):
+new visits start with the **Hidden feature requests** preset (high-band requests outside the Feature Request
+category), not a request-only dataset. **All topics**, bugs, questions and every existing filter remain
+available. Explicit shared/saved search, filter and topic state overrides the new default; old root deep
+links redirect to Requests with their query and fragment intact. Use `?scope=all` for an unfiltered share.
+
+Requests translates the published generated English title (when present), summary line and paragraph.
+Original thread titles remain in their source language, including English titles with no generated
+alternative. Translation never changes model ratings, source-language filters, topic IDs or the shared
+canonical-English embedding index.
+
 Main features:
 
 - **Keyword search** over titles, English titles, one-line and one-paragraph summaries, and tags (MiniSearch).
@@ -29,7 +40,7 @@ Main features:
 - **Card and table views**, and a mobile layout.
 - **Tips** (`/tips/`): a knowledge base of answered questions and shared know-how, rewritten by a local model into short question + answer entries, by area (Language, Interface, Database, Web & network, Administration, 4D Write Pro, 4D View Pro, Third party, Other), with keyword, semantic and hybrid search. See [docs/tips.md](docs/tips.md).
 - **Voices** (`/voices/`): threads where the community weighed in, with the question at stake, the views that came up and how it ended. No usernames are shown. See [docs/voices.md](docs/voices.md).
-- **EN / FR / JA** display languages on Tips and Voices, including translated generated entries, localized labels and shareable language state. English remains canonical; missing/stale translations are explicitly marked as English. [Translation checkpoints and hosted setup](docs/localization.md).
+- **EN / FR / JA** display languages on Requests, Tips and Voices, including translated generated entries, localized labels and shareable language state. Explicit `ui` wins over the saved preference, then browser language; `lang` still filters source-thread language. English remains canonical; missing/stale translations are explicitly marked as English. [Translation checkpoints and hosted setup](docs/localization.md).
 - **Light, dark or Auto theme**. Auto follows the OS and is the default. The choice is kept in localStorage and applied before first paint, so the page never flashes the wrong theme.
 
 Only titles, machine-translated titles, model-written summaries, metadata, model answers and links are published.
@@ -52,7 +63,7 @@ flowchart LR
 
 | Path | What it is |
 |------|------------|
-| `site/` | The static site. Vanilla ES modules with no build step: `index.html`, `tips/index.html`, `css/`, `js/`, and `vendor/minisearch.js`. |
+| `site/` | The static site. Vanilla ES modules with no build step: root redirect, `requests/index.html`, `tips/index.html`, `voices/index.html`, `css/`, `js/`, and `vendor/minisearch.js`. |
 | `site/data/` | Generated data. It is not committed; it is published as the release asset `site-data.tar.gz`. |
 | `config/questions.json` | Display labels for the model questions (all optional). |
 | `config/site.json` | Title, Feature Request category, preferred model run, preset views, embedding model. |

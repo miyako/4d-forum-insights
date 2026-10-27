@@ -9,7 +9,7 @@ export function emptyState() {
   return {
     q: '', mode: 'kw', sort: '', run: '', view: 'list', t: null,
     cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false,
-    ans: {},
+    ans: {}, scope: '',
   };
 }
 
@@ -18,6 +18,7 @@ const splitList = (v) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) 
 export function parseState(search, questions = []) {
   const p = new URLSearchParams(search);
   const s = emptyState();
+  s.scope = p.get('scope') === 'all' ? 'all' : '';
   s.q = p.get('q') || '';
   s.mode = ['kw', 'hyb', 'sem'].includes(p.get('mode')) ? p.get('mode') : 'kw';
   s.sort = p.get('sort') || '';
@@ -41,6 +42,7 @@ export function parseState(search, questions = []) {
 
 export function serializeState(s) {
   const p = new URLSearchParams();
+  if (s.scope === 'all') p.set('scope', 'all');
   if (s.q) p.set('q', s.q);
   if (s.mode !== 'kw') p.set('mode', s.mode);
   for (const k of LISTS) if (s[k].length) p.set(k, s[k].join(','));
@@ -59,6 +61,17 @@ export function serializeState(s) {
   return p.toString().replace(/%2C/g, ',');
 }
 
+export const REQUEST_STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', ...LISTS,
+  'from', 'to', 'votes', 'cls', 'enriched', 'scope'];
+
+/** Only an unfiltered new visit gets the Requests preset; old/shared intent wins. */
+export function parseRequestsState(search, questions = [], presets = []) {
+  const params = new URLSearchParams(search);
+  const explicit = [...params.keys()].some(key => REQUEST_STATE_KEYS.includes(key) || key.startsWith('a.'));
+  if (explicit) return parseState(search, questions);
+  const preset = presets.find(preset => preset.id === 'hidden-fr');
+  return parseState(preset?.params || 'a.fr=high&xcat=27&sort=a.fr', questions);
+}
 /** True when any filter (not query/sort/view) is set. */
 export function hasFilters(s) {
   return LISTS.some((k) => s[k].length) || s.from || s.to || s.votes || s.cls || s.enriched

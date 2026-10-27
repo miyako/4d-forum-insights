@@ -2,7 +2,7 @@
 
 const BASE = new URL('../data/', import.meta.url);
 
-async function getJSON(rel) {
+export async function getJSON(rel) {
   const res = await fetch(new URL(rel, BASE));
   if (!res.ok) throw new Error(`${rel}: HTTP ${res.status}`);
   return res.json();

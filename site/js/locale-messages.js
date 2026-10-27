@@ -1,5 +1,9 @@
 // English message keys are canonical. Unknown manifest labels deliberately fall back to English.
 const rows = [
+  ['4D Forum Requests', 'Demandes du forum 4D', '4Dフォーラムのリクエスト'],
+  ['Forum Requests', 'Demandes du forum', 'フォーラムのリクエスト'],
+  ['Requests', 'Demandes', 'リクエスト'],
+  ['Open in Forum Requests', 'Ouvrir dans les demandes du forum', 'フォーラムのリクエストで開く'],
   ['4D Forum Tips', 'Conseils du forum 4D', '4Dフォーラムのヒント'],
   ['4D Forum Voices', 'Échanges du forum 4D', '4Dフォーラムの声'],
   ['Forum Tips', 'Conseils du forum', 'フォーラムのヒント'],

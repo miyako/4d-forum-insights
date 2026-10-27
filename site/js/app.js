@@ -1,19 +1,29 @@
 // UI: everything (filters, sort options, table columns, chips, detail panel) is generated from
 // data/manifest.json, so a new model question shows up without code changes.
-import { loadManifest, loadTopics, loadText, loadRun } from './data.js';
-import { parseState, serializeState, hasFilters } from './state.js';
+import { loadManifest, loadTopics, loadText, loadRun, getJSON } from './data.js';
+import { parseState, parseRequestsState, serializeState, hasFilters } from './state.js';
 import {
-  buildPredicates, applyFilters, facetCounts, sortOptions, sortTopics, rrf, NOUL_FILTERS, daysToDate,
+  buildPredicates, applyFilters, facetCounts, sortOptions, sortTopics, rrf, NOUL_FILTERS, dateToDays,
 } from './filter.js';
 import { KeywordIndex, normalize } from './search.js';
 import { Semantic } from './semantic.js';
+import { preferredLocale, localeURL, navigationURL, stateURL, installLocale, loadOverlay } from './locale.js';
+import { createRequestsLocale, localizeRequestsManifest } from './requests-messages.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const num = new Intl.NumberFormat('en');
-const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-const pct = (p) => `${Math.round(p * 100)}%`;
+const i18n = createRequestsLocale(preferredLocale(location.search));
+const { t: tr, number: num, compact, pct, date: fmtDate } = i18n;
+const decimal = new Intl.NumberFormat(i18n.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const score = (value) => decimal.format(value);
+const stateDate = (value) => Number.isFinite(dateToDays(value)) ? fmtDate(dateToDays(value)) : value;
+installLocale(i18n, 'requests');
+document.title = tr('4D Forum Requests');
+const STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', 'cat', 'xcat', 'lang', 'tag', 'from', 'to', 'votes', 'cls', 'enriched', 'scope'];
+const noulLabel = (key) => tr({
+  yes: 'Yes (≥ {percent})', strong: 'Strong yes (≥ {percent})', no: 'No (< {percent})',
+}[key] || key, { percent: pct(key === 'strong' ? .8 : .5) });
 const PAGE = 50;
 const SEM_CANDIDATES = 500;
 
@@ -27,38 +37,37 @@ const app = {
 
 async function init() {
   try {
-    app.manifest = await loadManifest();
+    app.manifest = localizeRequestsManifest(await loadManifest(), i18n);
   } catch (e) {
     $('#count').textContent = '';
-    showStatus(`Could not load data/manifest.json (${esc(e.message)}). Build it with <code>make data</code>.`, 'error');
+    showStatus(`${esc(tr('Could not load data/manifest.json ({error}). Build it with', { error: e.message }))} <code>make data</code>.`, 'error');
     return;
   }
   const m = app.manifest;
-  document.title = m.title;
+  document.title = tr('4D Forum Requests');
   m.categories.forEach((c) => app.cats.set(c.id, c));
-  app.state = parseState(location.search, m.questions);
+  app.state = parseRequestsState(location.search, m.questions, m.presets);
   app.topics = await loadTopics(m);
+  // Hash all generated fields together before applying an overlay, including empty paragraphs.
+  await loadText(m, app.topics);
+  app.textLoaded = true;
+  app.topics = await loadOverlay(app.topics, 'requests', i18n.locale, getJSON);
   app.topics.forEach((t) => app.byId.set(t.id, t));
   app.semantic = new Semantic(m.embeddings);
   app.semantic.onProgress = onModelProgress;
   await selectRun(app.state.run);
   app.index = new KeywordIndex(app.topics);
+  await app.index.addParagraphs();
 
   renderStatic();
   update({ replace: true });
   if (app.state.mode !== 'kw') startSemantic();
   if (app.state.t) openDetail(app.state.t, { push: false });
 
-  loadText(m, app.topics).then(async () => {
-    app.textLoaded = true;
-    if (app.state.t) renderDetail(app.state.t);
-    await app.index.addParagraphs();
-    if (app.state.q) update({ keepPage: true });
-  }).catch((e) => console.warn('text.json', e));
-
   window.addEventListener('popstate', async () => {
+    if (preferredLocale(location.search) !== i18n.locale) return location.reload();
     const prevRun = app.state.run;
-    app.state = parseState(location.search, m.questions);
+    app.state = parseRequestsState(location.search, m.questions, m.presets);
     if (app.state.run !== prevRun) await selectRun(app.state.run);
     syncControls();
     update({ history: false });
@@ -101,18 +110,18 @@ function candidates() {
     app.terms.push(...q.split(/\s+/).filter((w) => w.length > 1 && !w.startsWith('-')).map((w) => normalize(w.replace(/"/g, ''))));
   }
   if (!semReady) {
-    const note = wantSem ? (app.sem.error ? 'semantic search unavailable — keyword results' : 'keyword results while the semantic model loads…') : '';
+    const note = wantSem ? tr(app.sem.error ? 'semantic search unavailable — keyword results' : 'keyword results while the semantic model loads…') : '';
     return { base: kw.map((r) => app.byId.get(r.id)), relevance: new Map(kw.map((r) => [r.id, r.score])), note };
   }
   const sem = app.sem.list.slice(0, SEM_CANDIDATES);
   const cover = app.manifest.embeddings.count < app.topics.length
-    ? ` · embeddings cover ${num.format(app.manifest.embeddings.count)} of ${num.format(app.topics.length)} topics` : '';
+    ? tr(' · embeddings cover {count} of {total} topics', { count: num.format(app.manifest.embeddings.count), total: num.format(app.topics.length) }) : '';
   if (s.mode === 'sem') {
     return {
       base: sem.map((r) => app.byId.get(r.id)).filter(Boolean),
       relevance: new Map(sem.map((r) => [r.id, r.score])),
       sim: new Map(sem.map((r) => [r.id, r.score])),
-      note: `semantic: top ${sem.length} most similar topics${cover}`,
+      note: tr('semantic: top {count} most similar topics', { count: num.format(sem.length) }) + cover,
     };
   }
   const fused = rrf([kw.map((r) => r.id), sem.map((r) => r.id)]);
@@ -120,14 +129,16 @@ function candidates() {
     base: [...fused.keys()].map((id) => app.byId.get(id)).filter(Boolean),
     relevance: fused,
     sim: new Map(sem.map((r) => [r.id, r.score])),
-    note: `hybrid: keyword + semantic (reciprocal rank fusion)${cover}`,
+    note: tr('hybrid: keyword + semantic (reciprocal rank fusion)') + cover,
   };
 }
 
 function update({ replace = false, history = true, keepPage = false } = {}) {
   const s = app.state;
+  if (!hasFilters(s)) s.scope = 'all';
   // filter/search changes replace the current history entry; opening a topic pushes one (Back closes it)
   if (history || replace) window.history.replaceState(null, '', urlFor(s));
+  refreshLocaleLinks();
   const { base, relevance, sim, note } = candidates();
   const ctx = { questions: app.questions, flags: app.manifest.flags };
   const preds = buildPredicates(s, ctx);
@@ -142,7 +153,7 @@ function update({ replace = false, history = true, keepPage = false } = {}) {
   renderSort(sort);
   renderActive();
   renderPresets();
-  $('#count').innerHTML = `<strong>${num.format(app.results.length)}</strong> topic${app.results.length === 1 ? '' : 's'}`
+  $('#count').innerHTML = tr(app.results.length === 1 ? '{count} topic' : '{count} topics', { count: `<strong>${num.format(app.results.length)}</strong>` })
     + (note ? ` <span class="muted">· ${esc(note)}</span>` : '');
   renderResults();
 }
@@ -165,26 +176,26 @@ async function runSemantic() {
     update({ history: false });
   } catch (e) {
     app.sem.error = e.message;
-    showStatus(`Semantic search failed: ${esc(e.message)}`, 'error');
+    showStatus(esc(tr('Semantic search failed: {error}', { error: e.message })), 'error');
   }
 }
 
 function startSemantic() {
   if (!app.semantic.available) {
     showStatus(app.manifest.embeddings
-      ? 'Semantic search is unavailable: this release has an incompatible embedding index. Rebuild and publish the matching EmbeddingGemma 2 index; keyword search still works.'
-      : 'Semantic search is not available: this data build has no embeddings yet (<code>make embeddings</code>).', 'warn');
+      ? esc(tr('Semantic search is unavailable: this release has an incompatible embedding index. Rebuild and publish the matching EmbeddingGemma 2 index; keyword search still works.'))
+      : `${esc(tr('Semantic search is not available: this data build has no embeddings yet'))} (<code>make embeddings</code>).`, 'warn');
     return;
   }
   if (!app.sem.ready) {
-    showStatus('Loading text-only EmbeddingGemma 2: about 207 MB for q4 WebGPU, or 575 MB for the fp16 WASM fallback. Downloaded on first use and cached by your browser when supported…', 'info');
+    showStatus(esc(tr('Loading text-only EmbeddingGemma 2: about 207 MB for q4 WebGPU, or 575 MB for the fp16 WASM fallback. Downloaded on first use and cached by your browser when supported…')), 'info');
     app.semantic.ready().then(() => {
       app.sem.ready = true;
       hideStatus();
       scheduleSemantic();
     }).catch((e) => {
       app.sem.error = e.message;
-      showStatus(`Could not load the semantic model: ${esc(e.message)}. Keyword search still works.`, 'error');
+      showStatus(esc(tr('Could not load the semantic model: {error}. Keyword search still works.', { error: e.message })), 'error');
       update({ history: false });
     });
   }
@@ -195,7 +206,7 @@ const progress = new Map();
 function onModelProgress(p) {
   if (p.status === 'fallback') {
     progress.clear();
-    showStatus('WebGPU is unavailable. Loading text-only EmbeddingGemma 2 with fp16 WASM (about 575 MB); keyword search still works.', 'info');
+    showStatus(esc(tr('WebGPU is unavailable. Loading text-only EmbeddingGemma 2 with fp16 WASM (about 575 MB); keyword search still works.')), 'info');
     return;
   }
   if (p.file && p.total) progress.set(p.file, [p.loaded || 0, p.total]);
@@ -203,7 +214,7 @@ function onModelProgress(p) {
   let l = 0, t = 0;
   for (const [a, b] of progress.values()) { l += a; t += b; }
   if (!app.sem.ready && t) {
-    showStatus(`Loading text-only EmbeddingGemma 2: ${(l / 1e6).toFixed(1)} / ${(t / 1e6).toFixed(1)} MB…`
+    showStatus(esc(tr('Loading text-only EmbeddingGemma 2: {loaded} / {total} MB…', { loaded: i18n.decimal.format(l / 1e6), total: i18n.decimal.format(t / 1e6) }))
       + `<span class="bar"><span style="width:${Math.round((100 * l) / t)}%"></span></span>`, 'info');
   }
 }
@@ -215,7 +226,7 @@ function renderStatic() {
   $('#tips-link').hidden = !m.tips?.runs?.length;
   $('#voices-link').hidden = !m.voices?.entries;
   const runSel = $('#run');
-  runSel.innerHTML = m.runs.map((r) => `<option value="${esc(r.id)}">${esc(r.label)} — ${num.format(r.count)} topics${r.id === m.default_run ? ' (default)' : ''}</option>`).join('');
+  runSel.innerHTML = m.runs.map((r) => `<option value="${esc(r.id)}">${esc(r.label)} — ${esc(tr(r.count === 1 ? '{count} topic' : '{count} topics', { count: num.format(r.count) }))}${r.id === m.default_run ? esc(tr(' (default)')) : ''}</option>`).join('');
   runSel.closest('.run-select').hidden = m.runs.length < 2;
   runSel.addEventListener('change', async () => {
     await selectRun(runSel.value);
@@ -238,7 +249,7 @@ function renderStatic() {
     update();
   }));
   if (!app.semantic.available) $$('.modes button:not([data-mode=kw])').forEach((b) => {
-    b.title += m.embeddings ? ' — unavailable: incompatible embedding index' : ' — unavailable: no embeddings in this build';
+    b.title += tr(m.embeddings ? ' — unavailable: incompatible embedding index' : ' — unavailable: no embeddings in this build');
     b.classList.add('unavailable');
   });
 
@@ -285,16 +296,13 @@ function renderFooter() {
   const st = m.stats;
   const emb = m.embeddings;
   $('#footer').innerHTML = `
-    <p>${num.format(st.topics)} topics from <a href="${esc(m.forum_url)}" target="_blank" rel="noopener">discuss.4d.com</a>
-      · ${num.format(st.enriched)} summarised · ${num.format(st.classified)} classified
-      · ${app.semantic.available ? `semantic index: ${num.format(emb.count)} topics (${esc(emb.model.split('/').pop())}, ${esc(emb.quant)}, ${emb.dim}d)` : emb ? 'semantic index incompatible — rebuild required' : 'no semantic index'}
-      · data built ${esc(m.generated_at.slice(0, 10))}${st.last_fetch ? `, forum fetched ${esc(st.last_fetch.slice(0, 10))}` : ''}</p>
-    <p class="muted">Titles link to the original discussions; posts are not republished. English titles, summaries and
-      classifications are generated by local language models and can be wrong — always check the thread.
-      Everything runs in your browser. <a href="https://github.com/miyako/4d-forum-insights">Source</a></p>
-    <p class="muted">Semantic and hybrid search use text-only EmbeddingGemma 2: about 207 MB on first use
-      with q4 WebGPU, or 575 MB for the fp16 WASM fallback, cached when supported.
-      Keyword search does not load the model.</p>`;
+    <p>${tr('{topics} topics from {forum}', { topics: num.format(st.topics), forum: `<a href="${esc(m.forum_url)}" target="_blank" rel="noopener">discuss.4d.com</a>` })}
+      · ${esc(tr('{count} summarised', { count: num.format(st.enriched) }))} · ${esc(tr('{count} classified', { count: num.format(st.classified) }))}
+      · ${esc(app.semantic.available ? tr('semantic index: {count} topics ({model}, {quant}, {dim}d)', { count: num.format(emb.count), model: emb.model.split('/').pop(), quant: emb.quant, dim: num.format(emb.dim) }) : tr(emb ? 'semantic index incompatible — rebuild required' : 'no semantic index'))}
+      · ${esc(tr('data built {date}', { date: fmtDate(dateToDays(m.generated_at.slice(0, 10))) }))}${st.last_fetch ? esc(tr(', forum fetched {date}', { date: fmtDate(dateToDays(st.last_fetch.slice(0, 10))) })) : ''}</p>
+    <p class="muted">${esc(tr('Titles link to the original discussions; posts are not republished. English titles, summaries and classifications are generated by local language models and can be wrong — always check the thread. Everything runs in your browser.'))} <a href="https://github.com/miyako/4d-forum-insights">${esc(tr('Source'))}</a></p>
+    <p class="muted">${esc(tr('Semantic and hybrid search use text-only EmbeddingGemma 2: about 207 MB on first use with q4 WebGPU, or 575 MB for the fp16 WASM fallback, cached when supported. Keyword search does not load the model.'))}</p>
+    ${i18n.locale !== 'en' ? `<p class="muted">${esc(tr('Translation coverage: {translated} of {total} topics. Missing or stale translations use English.', { translated: num.format(app.topics.filter((topic) => !topic.translationFallback).length), total: num.format(app.topics.length) }))}</p>` : ''}`;
 }
 
 // ------------------------------------------------------------------------------------------- filters
@@ -309,19 +317,19 @@ function renderFilterShell() {
   const qs = app.questions.map((q) => section(q.label, `<div class="opts" data-facet="a.${esc(q.id)}"></div>`,
     q.description ? ` <span class="help" title="${esc(q.description)}">?</span>` : ''));
   const frCat = app.manifest.feature_request_category;
-  const frName = app.cats.get(frCat)?.name || 'Feature Request';
+  const frName = app.cats.get(frCat)?.name || tr('Feature Request');
   $('#filter-body').innerHTML = `
-    ${app.questions.length ? `<div class="group-label">Model answers <span class="muted">(${esc(app.run.label)})</span></div>` : ''}
+    ${app.questions.length ? `<div class="group-label">${esc(tr('Model answers'))} <span class="muted">(${esc(app.run.label)})</span></div>` : ''}
     ${qs.join('')}
-    <div class="group-label">Topic</div>
-    ${section('Category', `<label class="opt toggle"><input type="checkbox" name="hidefr"> Hide “${esc(frName)}” category</label><div class="opts" data-facet="cat"></div>`)}
-    ${section('Language', '<div class="opts" data-facet="lang"></div>')}
-    ${section('Tags', '<input type="search" class="tag-filter" placeholder="Find a tag…" aria-label="Find a tag"><div class="opts" data-facet="tag"></div>', '', false)}
-    ${section('Created', `<div class="dates"><label>From <input type="date" name="from"></label><label>To <input type="date" name="to"></label></div>
-      <div class="quick">${[1, 2, 5].map((y) => `<button type="button" class="link" data-years="${y}">last ${y} yr${y > 1 ? 's' : ''}</button>`).join(' ')}</div>`, '', false)}
-    ${section('Votes', '<label class="opt">At least <input type="number" min="0" name="votes" class="num"> votes</label>', '', false)}
-    ${section('Status', `<label class="opt"><input type="checkbox" name="cls"> Classified by the model run</label>
-      <label class="opt"><input type="checkbox" name="enriched"> Has an English summary</label>`, '', false)}`;
+    <div class="group-label">${esc(tr('Topic'))}</div>
+    ${section(tr('Category'), `<label class="opt toggle"><input type="checkbox" name="hidefr"> ${esc(tr('Hide “{name}” category', { name: frName }))}</label><div class="opts" data-facet="cat"></div>`)}
+    ${section(tr('Language'), '<div class="opts" data-facet="lang"></div>')}
+    ${section(tr('Tags'), `<input type="search" class="tag-filter" placeholder="${esc(tr('Find a tag…'))}" aria-label="${esc(tr('Find a tag'))}"><div class="opts" data-facet="tag"></div>`, '', false)}
+    ${section(tr('Created'), `<div class="dates"><label>${esc(tr('From'))} <input type="date" name="from"></label><label>${esc(tr('To'))} <input type="date" name="to"></label></div>
+      <div class="quick">${[1, 2, 5].map((y) => `<button type="button" class="link" data-years="${y}">${esc(tr(y === 1 ? 'last {count} yr' : 'last {count} yrs', { count: num.format(y) }))}</button>`).join(' ')}</div>`, '', false)}
+    ${section(tr('Votes'), `<label class="opt">${esc(tr('At least'))} <input type="number" min="0" name="votes" class="num"> ${esc(tr('votes'))}</label>`, '', false)}
+    ${section(tr('Status'), `<label class="opt"><input type="checkbox" name="cls"> ${esc(tr('Classified by the model run'))}</label>
+      <label class="opt"><input type="checkbox" name="enriched"> ${esc(tr('Has an English summary'))}</label>`, '', false)}`;
   const f = $('#filter-body');
   f.onchange = onFilterChange;
   f.oninput = (e) => {
@@ -368,7 +376,7 @@ function onFilterChange(e) {
 
 function clearFilters() {
   const s = app.state;
-  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, ans: {} });
+  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, ans: {}, scope: 'all' });
   syncControls();
   update();
 }
@@ -387,7 +395,8 @@ const scoreClass = (q, a) => (bandOfAnswer(q, a) ? BAND_CLASSES(q, a.b) : LEVEL_
 const scoreTitle = (q, a) => {
   const l = q.levels.find((x) => x.key === a.lv);
   const b = bandOfAnswer(q, a);
-  return `${q.label}: ${b ? `${b.label} band (${b.long}); ` : ''}score ${a.s.toFixed(2)}, nearest level "${l?.long || a.lv}"`;
+  return tr(b ? '{question}: {band} band ({description}); score {score}, nearest level "{level}"' : '{question}: score {score}, nearest level "{level}"',
+    { question: q.label, band: b?.label, description: b?.long, score: score(a.s), level: l?.long || a.lv });
 };
 
 function optRow(facet, value, label, count, checked, type = 'checkbox', extra = '') {
@@ -406,9 +415,12 @@ function renderFacets(base, preds) {
     if (q.type === 'score' && q.bands?.length && app.run?.bands?.[q.id]) {
       const c = facetCounts(base, preds, 'a.' + q.id, (t) => t.ans?.[q.id]?.b);
       const cuts = app.run.bands[q.id].cuts;
-      box.innerHTML = q.bands.map((b, i) => optRow('a.' + q.id, b.key, esc(b.label), c.get(b.key) || 0,
-        sel?.includes(b.key), 'checkbox', `<i class="${BAND_CLASSES(q, b.key)}" title="${esc(b.long)}"></i>`)
-        .replace('<span class="opt-label">', `<span class="opt-label" title="${esc(b.long)}${cuts[i] != null ? ` (score ≥ ${cuts[i].toFixed(2)})` : ''}">`)).join('');
+      box.innerHTML = q.bands.map((b, i) => {
+        const cutoff = cuts[i] == null ? '' : ` (${tr('score ≥ {score}', { score: score(cuts[i]) })})`;
+        return optRow('a.' + q.id, b.key, esc(b.label), c.get(b.key) || 0,
+          sel?.includes(b.key), 'checkbox', `<i class="${BAND_CLASSES(q, b.key)}" title="${esc(b.long)}"></i>`)
+          .replace('<span class="opt-label">', `<span class="opt-label" title="${esc(b.long + cutoff)}">`);
+      }).join('');
     } else if (q.type === 'score') {
       const c = facetCounts(base, preds, 'a.' + q.id, (t) => t.ans?.[q.id]?.lv);
       box.innerHTML = [...q.levels].reverse().map((l) => optRow('a.' + q.id, l.key, esc(l.label), c.get(l.key) || 0,
@@ -419,8 +431,8 @@ function renderFacets(base, preds) {
     } else {
       const set = applyFilters(base, preds, 'a.' + q.id);
       const counts = NOUL_FILTERS.map((f) => set.filter((t) => t.ans?.[q.id] && f.test(t.ans[q.id].p)).length);
-      box.innerHTML = optRow('a.' + q.id, '', 'Any', null, !sel, 'radio')
-        + NOUL_FILTERS.map((f, i) => optRow('a.' + q.id, f.key, esc(f.label), counts[i], sel === f.key, 'radio')).join('');
+      box.innerHTML = optRow('a.' + q.id, '', esc(tr('Any')), null, !sel, 'radio')
+        + NOUL_FILTERS.map((f, i) => optRow('a.' + q.id, f.key, esc(noulLabel(f.key)), counts[i], sel === f.key, 'radio')).join('');
     }
   }
   const cc = facetCounts(base, preds, 'cat', (t) => t.cat);
@@ -438,7 +450,7 @@ function renderTagOptions() {
   let tags = needle ? app.manifest.tags.filter((t) => normalize(t).includes(needle)) : [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
   tags = [...new Set([...s.tag, ...tags.slice(0, needle ? 40 : 15)])];
   $('[data-facet=tag]').innerHTML = tags.map((t) => optRow('tag', t, esc(t), counts.get(t) || 0, s.tag.includes(t))).join('')
-    || '<div class="muted small">No tags</div>';
+    || `<div class="muted small">${esc(tr('No tags'))}</div>`;
 }
 
 function renderSort(sort) {
@@ -446,8 +458,14 @@ function renderSort(sort) {
   const groups = {};
   for (const o of opts) (groups[o.group || ''] ||= []).push(o);
   $('#sort').innerHTML = Object.entries(groups).map(([g, list]) => {
-    const html = list.map((o) => `<option value="${esc(o.key)}" ${o.key === sort ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
-    return g ? `<optgroup label="${esc(g)}">${html}</optgroup>` : html;
+    const html = list.map((o) => {
+      const [qid, choice] = o.key.slice(2).split(':');
+      const q = o.key.startsWith('a.') && app.questions.find((item) => item.id === qid);
+      const label = q ? tr(q.type === 'score' ? '{label} score' : q.type === 'noul' ? '{label} (p)' : '{label}: P({choice})',
+        { label: q.type === 'choice' ? q.short : q.label, choice: q.choices?.find((item) => item.key === choice)?.label || choice }) : tr(o.label);
+      return `<option value="${esc(o.key)}" ${o.key === sort ? 'selected' : ''}>${esc(label)}</option>`;
+    }).join('');
+    return g ? `<optgroup label="${esc(tr(g))}">${html}</optgroup>` : html;
   }).join('');
 }
 
@@ -455,26 +473,26 @@ function renderActive() {
   const s = app.state;
   const chips = [];
   const chip = (label, fn) => chips.push({ label, fn });
-  for (const c of s.cat) chip(`Category: ${app.cats.get(Number(c))?.name || c}`, () => s.cat.splice(s.cat.indexOf(c), 1));
-  for (const c of s.xcat) chip(`Not: ${app.cats.get(Number(c))?.name || c}`, () => s.xcat.splice(s.xcat.indexOf(c), 1));
-  for (const l of s.lang) chip(`Language: ${app.manifest.languages.find((x) => x.code === l)?.name || l}`, () => s.lang.splice(s.lang.indexOf(l), 1));
-  for (const t of s.tag) chip(`Tag: ${t}`, () => s.tag.splice(s.tag.indexOf(t), 1));
-  if (s.from) chip(`From ${s.from}`, () => { s.from = ''; });
-  if (s.to) chip(`To ${s.to}`, () => { s.to = ''; });
-  if (s.votes) chip(`≥ ${s.votes} votes`, () => { s.votes = 0; });
-  if (s.cls) chip('Classified', () => { s.cls = false; });
-  if (s.enriched) chip('Summarised', () => { s.enriched = false; });
+  for (const c of s.cat) chip(tr('Category: {name}', { name: app.cats.get(Number(c))?.name || c }), () => s.cat.splice(s.cat.indexOf(c), 1));
+  for (const c of s.xcat) chip(tr('Not: {name}', { name: app.cats.get(Number(c))?.name || c }), () => s.xcat.splice(s.xcat.indexOf(c), 1));
+  for (const l of s.lang) chip(tr('Language: {name}', { name: app.manifest.languages.find((x) => x.code === l)?.name || l }), () => s.lang.splice(s.lang.indexOf(l), 1));
+  for (const t of s.tag) chip(tr('Tag: {name}', { name: t }), () => s.tag.splice(s.tag.indexOf(t), 1));
+  if (s.from) chip(tr('From {date}', { date: stateDate(s.from) }), () => { s.from = ''; });
+  if (s.to) chip(tr('To {date}', { date: stateDate(s.to) }), () => { s.to = ''; });
+  if (s.votes) chip(tr('≥ {count} votes', { count: num.format(s.votes) }), () => { s.votes = 0; });
+  if (s.cls) chip(tr('Classified'), () => { s.cls = false; });
+  if (s.enriched) chip(tr('Summarised'), () => { s.enriched = false; });
   for (const q of app.questions) {
     const v = s.ans[q.id];
     if (!v || (Array.isArray(v) && !v.length)) continue;
     const label = q.type === 'score' ? v.map((k) => q.bands?.find((b) => b.key === k)?.label || q.levels.find((l) => l.key === k)?.label || k).join(' / ')
       : q.type === 'choice' ? v.map((k) => q.choices.find((c) => c.key === k)?.label || k).join(' / ')
-        : NOUL_FILTERS.find((f) => f.key === v)?.label || v;
+        : noulLabel(v);
     chip(`${q.short}: ${label}`, () => { delete s.ans[q.id]; });
   }
   const box = $('#active-filters');
   box.innerHTML = chips.map((c, i) => `<button type="button" class="chip removable" data-i="${i}">${esc(c.label)} <span aria-hidden="true">×</span></button>`).join('')
-    + (chips.length > 1 ? '<button type="button" class="link" data-clear>Clear all</button>' : '');
+    + (chips.length > 1 ? `<button type="button" class="link" data-clear>${esc(tr('Clear all'))}</button>` : '');
   box.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -488,17 +506,18 @@ function renderActive() {
 function renderPresets() {
   const m = app.manifest;
   const s = app.state;
-  const current = new URLSearchParams(serializeState({ ...s, q: '', mode: 'kw', run: '', view: 'list', t: null }));
+  const current = new URLSearchParams(serializeState({ ...s, q: '', mode: 'kw', run: '', view: 'list', t: null, scope: '' }));
   const same = (params) => {
     const p = new URLSearchParams(params);
+    p.delete('scope');
     return [...p].length === [...current].length && [...p].every(([k, v]) => current.get(k) === v);
   };
-  $('#presets').innerHTML = '<span class="muted">Views:</span>' + m.presets.map((p) => `<button type="button" class="preset${same(p.params) ? ' active' : ''}" data-params="${esc(p.params)}" title="${esc(p.description || '')}">${esc(p.label)}</button>`).join('');
+  $('#presets').innerHTML = `<span class="muted">${esc(tr('Views:'))}</span>` + m.presets.map((p) => `<button type="button" class="preset${same(p.params) ? ' active' : ''}" data-params="${esc(p.params)}" title="${esc(p.description || '')}">${esc(p.label)}</button>`).join('');
   $('#presets').onclick = (e) => {
     const b = e.target.closest('.preset');
     if (!b) return;
     const keep = { q: s.q, mode: s.mode, run: s.run, view: s.view };
-    app.state = { ...parseState(b.dataset.params, m.questions), ...keep };
+    app.state = { ...parseState(b.dataset.params, m.questions), ...keep, scope: 'all' };
     syncControls();
     update();
   };
@@ -517,12 +536,29 @@ function highlight(text) {
   }).join('');
 }
 
-const urlFor = (state) => { const qs = serializeState(state); return qs ? `?${qs}` : location.pathname; };
+const urlFor = (state) => {
+  const keys = [...STATE_KEYS, ...app.manifest.questions.map((q) => 'a.' + q.id),
+    ...[...new URLSearchParams(location.search).keys()].filter((key) => key.startsWith('a.'))];
+  const qs = stateURL(location.search, serializeState(state), keys, i18n.locale);
+  return location.pathname + (qs ? `?${qs}` : '') + location.hash;
+};
 const topicUrl = (t) => `${app.manifest.forum_url}/t/${encodeURIComponent(t.slug)}/${t.id}`;
-const detailHref = (t) => `?${serializeState({ ...app.state, t: t.id })}`;
+const detailHref = (t) => urlFor({ ...app.state, t: t.id });
+
+function refreshLocaleLinks() {
+  for (const link of $$('#locale-nav a')) link.href = localeURL(location.href, link.hreflang);
+  for (const link of $$('a[data-locale-href]')) {
+    link.href = navigationURL(link.dataset.localeHref, i18n.locale, location.href);
+  }
+}
+
+const fallbackBadge = (topic) => topic.translationFallback
+  ? `<span class="chip muted-chip translation-fallback">${esc(tr('English fallback'))}</span>` : '';
+const originalTitleLabel = (topic) => !topic.title_en
+  ? `<span class="muted small">${esc(tr('Original title'))}</span> ` : '';
 
 function answerChips(t, { all = false } = {}) {
-  if (!t.ans) return app.run ? '<span class="chip muted-chip" title="Not classified by this model run yet">not classified</span>' : '';
+  if (!t.ans) return app.run ? `<span class="chip muted-chip" title="${esc(tr('Not classified by this model run yet'))}">${esc(tr('not classified'))}</span>` : '';
   return app.questions.map((q) => {
     const a = t.ans[q.id];
     if (!a) return '';
@@ -543,14 +579,14 @@ function metaLine(t) {
   const cat = app.cats.get(t.cat);
   const parts = [
     cat ? `<span class="cat${t.cat === app.manifest.feature_request_category ? ' fr' : ''}">${esc(cat.name)}</span>` : '',
-    `<span title="Language${t.flags & app.manifest.flags.lang_guessed ? ' (guessed)' : ''}">${esc(t.lang.toUpperCase())}</span>`,
-    `<span title="Created">${daysToDate(t.created)}</span>`,
-    `<span title="Replies">💬 ${num.format(Math.max(0, t.posts - 1))}</span>`,
-    t.likes ? `<span title="Likes">♥ ${compact.format(t.likes)}</span>` : '',
-    t.votes ? `<span title="Votes">▲ ${num.format(t.votes)}</span>` : '',
-    `<span title="Views">👁 ${compact.format(t.views)}</span>`,
-    t.flags & app.manifest.flags.accepted ? '<span class="solved" title="Has an accepted answer">✓ solved</span>' : '',
-    app.sim?.has(t.id) ? `<span class="sim" title="Cosine similarity to the query">≈ ${app.sim.get(t.id).toFixed(2)}</span>` : '',
+    `<span title="${esc(tr(t.flags & app.manifest.flags.lang_guessed ? 'Language (guessed)' : 'Language'))}">${esc(t.lang.toUpperCase())}</span>`,
+    `<span title="${esc(tr('Created'))}">${esc(fmtDate(t.created))}</span>`,
+    `<span title="${esc(tr('Replies'))}">💬 ${num.format(Math.max(0, t.posts - 1))}</span>`,
+    t.likes ? `<span title="${esc(tr('Likes'))}">♥ ${compact.format(t.likes)}</span>` : '',
+    t.votes ? `<span title="${esc(tr('Votes'))}">▲ ${num.format(t.votes)}</span>` : '',
+    `<span title="${esc(tr('Views'))}">👁 ${compact.format(t.views)}</span>`,
+    t.flags & app.manifest.flags.accepted ? `<span class="solved" title="${esc(tr('Has an accepted answer'))}">${esc(tr('✓ solved'))}</span>` : '',
+    app.sim?.has(t.id) ? `<span class="sim" title="${esc(tr('Cosine similarity to the query'))}">≈ ${score(app.sim.get(t.id))}</span>` : '',
   ];
   return parts.filter(Boolean).join('<span class="dot">·</span>');
 }
@@ -559,7 +595,7 @@ function renderResults() {
   const list = app.results.slice(0, app.shown);
   const box = $('#results');
   if (!app.results.length) {
-    box.innerHTML = `<div class="empty">No topics match.${hasFilters(app.state) ? ' Try removing a filter.' : ''}${app.state.mode === 'kw' && app.state.q && app.semantic.available ? ' Or try <button type="button" class="link" data-mode-switch="hyb">hybrid search</button>.' : ''}</div>`;
+    box.innerHTML = `<div class="empty">${esc(tr('No topics match.'))}${hasFilters(app.state) ? esc(tr(' Try removing a filter.')) : ''}${app.state.mode === 'kw' && app.state.q && app.semantic.available ? `${esc(tr(' Or try'))} <button type="button" class="link" data-mode-switch="hyb">${esc(tr('hybrid search'))}</button>.` : ''}</div>`;
   } else if (app.state.view === 'table') {
     box.innerHTML = renderTable(list);
   } else {
@@ -567,9 +603,11 @@ function renderResults() {
       const title = t.title_en || t.title;
       return `<article class="card${t.id === app.state.t ? ' selected' : ''}" data-id="${t.id}">
         <div class="card-main">
-          <a class="title" href="${esc(detailHref(t))}" data-open="${t.id}">${highlight(title)}</a>
+          ${originalTitleLabel(t)}
+          <a class="title" lang="${esc(t.title_en ? t.contentLocale || 'en' : t.lang)}" href="${esc(detailHref(t))}" data-open="${t.id}">${highlight(title)}</a>
           ${t.title_en ? `<div class="orig" lang="${esc(t.lang)}">${highlight(t.title)}</div>` : ''}
-          ${t.line ? `<p class="line">${highlight(t.line)}</p>` : ''}
+          ${t.line ? `<p class="line" lang="${esc(t.contentLocale || 'en')}">${highlight(t.line)}</p>` : ''}
+          ${fallbackBadge(t)}
           <div class="meta">${metaLine(t)}</div>
         </div>
         <div class="card-side">${answerChips(t)}</div>
@@ -577,7 +615,7 @@ function renderResults() {
     }).join('');
   }
   $('#more').innerHTML = app.shown < app.results.length
-    ? `<button type="button" class="btn" id="more-btn">Show more (${num.format(app.results.length - app.shown)} left)</button>` : '';
+    ? `<button type="button" class="btn" id="more-btn">${esc(tr('Show more ({count} left)', { count: num.format(app.results.length - app.shown) }))}</button>` : '';
   $('#more-btn')?.addEventListener('click', () => { app.shown += PAGE; renderResults(); });
 }
 
@@ -589,16 +627,16 @@ function renderTable(list) {
     const cells = app.questions.map((q) => {
       const a = t.ans?.[q.id];
       if (!a) return '<td class="q muted">–</td>';
-      if (q.type === 'score') return `<td class="q"><span class="chip ${scoreClass(q, a)}" title="${esc(scoreTitle(q, a))}">${a.s.toFixed(2)}</span></td>`;
+      if (q.type === 'score') return `<td class="q"><span class="chip ${scoreClass(q, a)}" title="${esc(scoreTitle(q, a))}">${score(a.s)}</span></td>`;
       if (q.type === 'choice') return `<td class="q">${esc(q.choices.find((c) => c.key === a.c)?.label || '')}</td>`;
       return `<td class="q num"><span class="pbar" style="--p:${a.p}"></span>${pct(a.p)}</td>`;
     }).join('');
     return `<tr data-id="${t.id}" class="${t.id === app.state.t ? 'selected' : ''}">
-      <td class="t"><a href="${esc(detailHref(t))}" data-open="${t.id}">${highlight(t.title_en || t.title)}</a>${t.line ? `<div class="line small">${highlight(t.line)}</div>` : ''}</td>
-      <td>${esc(app.cats.get(t.cat)?.name || '')}</td><td>${esc(t.lang)}</td><td class="nowrap">${daysToDate(t.created)}</td>
-      <td class="num">${t.posts - 1}</td><td class="num">${t.votes || ''}</td>${cells}</tr>`;
+      <td class="t">${originalTitleLabel(t)}<a lang="${esc(t.title_en ? t.contentLocale || 'en' : t.lang)}" href="${esc(detailHref(t))}" data-open="${t.id}">${highlight(t.title_en || t.title)}</a>${t.line ? `<div class="line small" lang="${esc(t.contentLocale || 'en')}">${highlight(t.line)}</div>` : ''}${fallbackBadge(t)}</td>
+      <td>${esc(app.cats.get(t.cat)?.name || '')}</td><td>${esc(t.lang)}</td><td class="nowrap">${esc(fmtDate(t.created))}</td>
+      <td class="num">${num.format(Math.max(0, t.posts - 1))}</td><td class="num">${t.votes ? num.format(t.votes) : ''}</td>${cells}</tr>`;
   }).join('');
-  return `<div class="table-wrap"><table class="grid"><thead><tr>${th('', 'Topic')}${th('', 'Category')}${th('', 'Lang')}${th('new', 'Created')}${th('posts', 'Replies', 'num')}${th('votes', 'Votes', 'num')}${qCols.join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="grid"><thead><tr>${th('', tr('Topic'))}${th('', tr('Category'))}${th('', tr('Lang'))}${th('new', tr('Created'))}${th('posts', tr('Replies'), 'num')}${th('votes', tr('Votes'), 'num')}${qCols.join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function onResultClick(e) {
@@ -620,6 +658,7 @@ function openDetail(id, { push = true } = {}) {
   if (!app.byId.has(id)) return;
   app.state.t = id;
   if (push) window.history.pushState(null, '', urlFor(app.state));
+  refreshLocaleLinks();
   $('#detail').hidden = false;
   document.body.classList.add('has-detail');
   $$('.selected', $('#results')).forEach((el) => el.classList.remove('selected'));
@@ -631,6 +670,7 @@ function openDetail(id, { push = true } = {}) {
 function closeDetail({ push = true } = {}) {
   app.state.t = null;
   if (push) window.history.pushState(null, '', urlFor(app.state));
+  refreshLocaleLinks();
   $('#detail').hidden = true;
   document.body.classList.remove('has-detail');
   $$('.selected', $('#results')).forEach((el) => el.classList.remove('selected'));
@@ -650,15 +690,15 @@ function answerBlock(q, a, run) {
     const b = bandOfAnswer(q, a);
     const cuts = run?.bands?.[q.id]?.cuts || [];
     const bi = b ? q.bands.indexOf(b) : -1;
-    const range = bi < 0 ? '' : bi < cuts.length ? `score ≥ ${cuts[bi].toFixed(2)}` : `score < ${cuts[cuts.length - 1]?.toFixed(2)}`;
-    body = `<div class="score-line">Expected level <strong>${a.s.toFixed(2)}</strong> / ${max} → <span class="chip ${LEVEL_CLASSES(q, a.lv)}">${esc(q.levels[chosen].label)}</span>`
-      + (b ? ` · band <span class="chip ${BAND_CLASSES(q, a.b)}" title="${esc(b.long)}">${esc(b.label)}</span> <span class="muted small">${esc(range)}: ${esc(b.long)}</span>` : '')
+    const range = bi < 0 || !cuts.length ? '' : tr(bi < cuts.length ? 'score ≥ {score}' : 'score < {score}', { score: score(bi < cuts.length ? cuts[bi] : cuts[cuts.length - 1]) });
+    body = `<div class="score-line">${esc(tr('Expected level'))} <strong>${score(a.s)}</strong> / ${num.format(max)} → <span class="chip ${LEVEL_CLASSES(q, a.lv)}">${esc(q.levels[chosen].label)}</span>`
+      + (b ? ` · ${esc(tr('band'))} <span class="chip ${BAND_CLASSES(q, a.b)}" title="${esc(b.long)}">${esc(b.label)}</span> <span class="muted small">${esc(range)}: ${esc(b.long)}</span>` : '')
       + '</div>'
       + probRows([...q.levels].reverse(), [...a.p].reverse(), q.levels.length - 1 - chosen);
   } else if (q.type === 'choice') {
     body = probRows(q.choices, a.p, q.choices.findIndex((c) => c.key === a.c));
   } else {
-    body = probRows([{ label: 'Yes' }], [a.p], a.p >= 0.5 ? 0 : -1);
+    body = probRows([{ label: tr('Yes') }], [a.p], a.p >= 0.5 ? 0 : -1);
   }
   return `<div class="answer"><div class="q-title">${esc(q.label)}${q.description ? `<span class="q-desc">${esc(q.description)}</span>` : ''}</div>${body}</div>`;
 }
@@ -668,36 +708,43 @@ async function renderDetail(id) {
   const m = app.manifest;
   const cat = app.cats.get(t.cat);
   const tags = t.tags.map((x) => `<button type="button" class="chip tag" data-tag="${esc(x)}">${esc(x)}</button>`).join('');
-  const para = t.para === undefined && !app.textLoaded ? '<p class="muted">Loading summary…</p>'
-    : t.para ? `<p>${esc(t.para)}</p>` : '';
+  const para = t.para === undefined && !app.textLoaded ? `<p class="muted">${esc(tr('Loading summary…'))}</p>`
+    : t.para ? `<p lang="${esc(t.contentLocale || 'en')}">${esc(t.para)}</p>` : '';
   const summary = t.line || t.para
-    ? `<p class="lead">${esc(t.line || '')}</p>${para}`
-    : `<p class="muted">No English summary yet${t.flags & m.flags.enriched ? '' : ' (this topic has not been processed by the summariser)'}.</p>`;
+    ? `<p class="lead" lang="${esc(t.contentLocale || 'en')}">${esc(t.line || '')}</p>${para}`
+    : `<p class="muted">${esc(tr('No English summary yet.'))}${t.flags & m.flags.enriched ? '' : ` ${esc(tr('This topic has not been processed by the summariser.'))}`}</p>`;
+  const source = t.canonicalFields;
+  const original = `<section><h3>${esc(tr('Original title'))}</h3><p lang="${esc(t.lang)}">${esc(t.title)}</p></section>`;
+  const english = source ? `<details><summary>${esc(tr('English generated source'))}</summary>
+    ${source.title_en ? `<h4>${esc(tr('English generated title'))}</h4><p lang="en">${esc(source.title_en)}</p>` : ''}
+    ${source.line ? `<p lang="en">${esc(source.line)}</p>` : ''}
+    ${source.para ? `<p lang="en">${esc(source.para)}</p>` : ''}</details>` : '';
+  const embeddingSize = m.embeddings ? tr('{size} MB', { size: i18n.decimal.format(m.embeddings.bytes / 1e6) }) : '';
   const runs = [app.run, ...m.runs.filter((r) => r.id !== app.run?.id)].filter(Boolean);
   $('#detail-body').innerHTML = `
     <div class="detail-head">
-      <button type="button" class="icon" data-close title="Close (Esc)" aria-label="Close">✕</button>
-      <span class="muted small">#${t.id}</span>
+      <button type="button" class="icon" data-close title="${esc(tr('Close (Esc)'))}" aria-label="${esc(tr('Close'))}">✕</button>
+      <span class="muted small">#${t.id}</span> ${fallbackBadge(t)}
     </div>
-    <h2>${esc(t.title_en || t.title)}</h2>
-    ${t.title_en ? `<p class="orig" lang="${esc(t.lang)}">${esc(t.title)}</p>` : ''}
+    ${originalTitleLabel(t)}<h2 lang="${esc(t.title_en ? t.contentLocale || 'en' : t.lang)}">${esc(t.title_en || t.title)}</h2>
     <p class="actions">
-      <a class="btn primary" href="${esc(topicUrl(t))}" target="_blank" rel="noopener">Open on discuss.4d.com ↗</a>
-      <button type="button" class="btn" data-copy>Copy link</button>
+      <a class="btn primary" href="${esc(topicUrl(t))}" target="_blank" rel="noopener">${esc(tr('Open on discuss.4d.com ↗'))}</a>
+      <button type="button" class="btn" data-copy>${esc(tr('Copy link'))}</button>
     </p>
     <dl class="facts">
-      <dt>Category</dt><dd>${esc(cat?.name || t.cat)}</dd>
-      <dt>Language</dt><dd>${esc(m.languages.find((l) => l.code === t.lang)?.name || t.lang)}${t.flags & m.flags.lang_guessed ? ' <span class="muted">(guessed)</span>' : ''}</dd>
-      <dt>Created</dt><dd>${daysToDate(t.created)}</dd>
-      <dt>Last activity</dt><dd>${daysToDate(t.active)}</dd>
-      <dt>Replies</dt><dd>${num.format(Math.max(0, t.posts - 1))}</dd>
-      <dt>Views · Likes · Votes</dt><dd>${num.format(t.views)} · ${num.format(t.likes)} · ${num.format(t.votes)}</dd>
-      <dt>Status</dt><dd>${[t.flags & m.flags.accepted ? 'solved' : '', t.flags & m.flags.closed ? 'closed' : '', t.flags & m.flags.archived ? 'archived' : ''].filter(Boolean).join(', ') || 'open'}</dd>
+      <dt>${esc(tr('Category'))}</dt><dd>${esc(cat?.name || t.cat)}</dd>
+      <dt>${esc(tr('Source language'))}</dt><dd>${esc(m.languages.find((l) => l.code === t.lang)?.name || t.lang)}${t.flags & m.flags.lang_guessed ? ` <span class="muted">${esc(tr('(guessed)'))}</span>` : ''}</dd>
+      <dt>${esc(tr('Created'))}</dt><dd>${esc(fmtDate(t.created))}</dd>
+      <dt>${esc(tr('Last activity'))}</dt><dd>${esc(fmtDate(t.active))}</dd>
+      <dt>${esc(tr('Replies'))}</dt><dd>${num.format(Math.max(0, t.posts - 1))}</dd>
+      <dt>${esc(tr('Views · Likes · Votes'))}</dt><dd>${num.format(t.views)} · ${num.format(t.likes)} · ${num.format(t.votes)}</dd>
+      <dt>${esc(tr('Status'))}</dt><dd>${esc([t.flags & m.flags.accepted ? tr('solved') : '', t.flags & m.flags.closed ? tr('closed') : '', t.flags & m.flags.archived ? tr('archived') : ''].filter(Boolean).join(', ') || tr('open'))}</dd>
     </dl>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
-    <section><h3>Summary <span class="muted small">(machine-generated)</span></h3>${summary}</section>
-    <section><h3>Model answers</h3><div id="runs-detail">${runs.map((r) => `<details class="run" data-run="${esc(r.id)}" ${r.id === app.run?.id ? 'open' : ''}><summary>${esc(r.label)}${r.id === app.run?.id && runs.length > 1 ? ' <span class="muted">(selected)</span>' : ''}</summary><div class="run-body muted small">Loading…</div></details>`).join('') || '<p class="muted">No model runs in this build.</p>'}</div></section>
-    ${app.semantic.available ? `<section><h3>Similar topics</h3><div id="similar">${app.semantic.vectors ? '<p class="muted small">Loading…</p>' : `<button type="button" class="btn" data-similar>Find similar topics <span class="muted">(${(m.embeddings.bytes / 1e6).toFixed(1)} MB)</span></button>`}</div></section>` : ''}`;
+    <section><h3>${esc(tr('Summary'))} <span class="muted small">${esc(tr('(machine-generated)'))}</span></h3>${summary}</section>
+    ${original}${english}
+    <section><h3>${esc(tr('Model answers'))}</h3><div id="runs-detail">${runs.map((r) => `<details class="run" data-run="${esc(r.id)}" ${r.id === app.run?.id ? 'open' : ''}><summary>${esc(r.label)}${r.id === app.run?.id && runs.length > 1 ? ` <span class="muted">${esc(tr('(selected)'))}</span>` : ''}</summary><div class="run-body muted small">${esc(tr('Loading…'))}</div></details>`).join('') || `<p class="muted">${esc(tr('No model runs in this build.'))}</p>`}</div></section>
+    ${app.semantic.available ? `<section><h3>${esc(tr('Similar topics'))}</h3><div id="similar">${app.semantic.vectors ? `<p class="muted small">${esc(tr('Loading…'))}</p>` : `<button type="button" class="btn" data-similar>${esc(tr('Find similar topics'))} <span class="muted">(${esc(embeddingSize)})</span></button>`}</div></section>` : ''}`;
   for (const r of runs) {
     loadRun(m, r.id).then((answers) => {
       if (app.state.t !== id) return;
@@ -706,9 +753,13 @@ async function renderDetail(id) {
       if (!box) return;
       box.classList.remove('muted', 'small');
       const qs = m.questions.filter((q) => r.questions.includes(q.id));
-      box.innerHTML = a ? qs.map((q) => answerBlock(q, a[q.id], r)).join('') : '<p class="muted small">Not classified by this run.</p>';
+      box.innerHTML = a ? qs.map((q) => answerBlock(q, a[q.id], r)).join('') : `<p class="muted small">${esc(tr('Not classified by this run.'))}</p>`;
       const sum = $(`[data-run="${CSS.escape(r.id)}"] summary`);
       if (sum && !a) sum.classList.add('muted');
+    }).catch((e) => {
+      if (app.state.t !== id) return;
+      const box = $(`[data-run="${CSS.escape(r.id)}"] .run-body`);
+      if (box) box.innerHTML = `<p>${esc(tr('Could not load model answers: {error}', { error: e.message }))}</p>`;
     });
   }
   if (app.semantic.vectors) renderSimilar(id);
@@ -722,10 +773,10 @@ async function renderSimilar(id) {
     if (app.state.t !== id) return;
     box.innerHTML = sims.length ? `<ul class="similar">${sims.map((s) => {
       const t = app.byId.get(s.id);
-      return t ? `<li><a href="${esc(detailHref(t))}" data-open-detail="${t.id}">${esc(t.title_en || t.title)}</a> <span class="muted small">≈ ${s.score.toFixed(2)} · ${esc(app.cats.get(t.cat)?.name || '')}</span> ${answerChips(t)}</li>` : '';
-    }).join('')}</ul>` : '<p class="muted small">This topic is not in the semantic index yet.</p>';
+      return t ? `<li>${originalTitleLabel(t)}<a lang="${esc(t.title_en ? t.contentLocale || 'en' : t.lang)}" href="${esc(detailHref(t))}" data-open-detail="${t.id}">${esc(t.title_en || t.title)}</a> <span class="muted small">≈ ${score(s.score)} · ${esc(app.cats.get(t.cat)?.name || '')}</span> ${fallbackBadge(t)} ${answerChips(t)}</li>` : '';
+    }).join('')}</ul>` : `<p class="muted small">${esc(tr('This topic is not in the semantic index yet.'))}</p>`;
   } catch (e) {
-    box.innerHTML = `<p class="muted small">Could not load embeddings: ${esc(e.message)}</p>`;
+    box.innerHTML = `<p class="muted small">${esc(tr('Could not load embeddings: {error}', { error: e.message }))}</p>`;
   }
 }
 
@@ -733,10 +784,10 @@ function onDetailClick(e) {
   if (e.target.closest('[data-close]')) return closeDetail();
   if (e.target.closest('[data-copy]')) {
     navigator.clipboard?.writeText(location.href);
-    e.target.closest('[data-copy]').textContent = 'Copied';
+    e.target.closest('[data-copy]').textContent = tr('Copied');
     return;
   }
-  if (e.target.closest('[data-similar]')) { $('#similar').innerHTML = '<p class="muted small">Loading…</p>'; renderSimilar(app.state.t); return; }
+  if (e.target.closest('[data-similar]')) { $('#similar').innerHTML = `<p class="muted small">${esc(tr('Loading…'))}</p>`; renderSimilar(app.state.t); return; }
   const tag = e.target.closest('[data-tag]');
   if (tag) { app.state.tag = [tag.dataset.tag]; syncControls(); update(); return; }
   const link = e.target.closest('[data-open-detail]');
@@ -753,4 +804,7 @@ function showStatus(html, kind = 'info') {
 }
 function hideStatus() { $('#status').hidden = true; }
 
-init();
+init().catch((e) => {
+  $('#count').textContent = '';
+  showStatus(esc(tr('Could not load requests: {error}', { error: e.message })), 'error');
+});

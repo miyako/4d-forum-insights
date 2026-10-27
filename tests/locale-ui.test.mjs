@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {
-  localeOf, localeURL, stateURL, createLocale, canonicalJSON, sourceHash,
+  localeOf, preferredLocale, localeURL, stateURL, createLocale, canonicalJSON, sourceHash,
   applyOverlay, loadOverlay, translatedFields, localizeDOM, installLocale, modelDisclosure,
 } from '../site/js/locale.js';
 import { messages } from '../site/js/locale-messages.js';
@@ -33,7 +33,7 @@ test('ui never reinterprets source-thread lang and switching keeps complete stat
   const href = '/tips/?q=ORDA&mode=hyb&area=database&type=tip&conf=70&since=2020&all=1&lang=ja&t=42#entry';
   const fr = localeURL(href, 'fr');
   assert.equal(fr, href.replace('#entry', '&ui=fr#entry'));
-  assert.equal(localeURL(fr, 'en'), href);
+  assert.equal(localeURL(fr, 'en'), href.replace('#entry', '&ui=en#entry'));
   assert.equal(localeURL('../voices/', 'ja', 'https://example.test/tips/?ui=ja'), '/voices/?ui=ja');
   const keys = ['q', 'mode', 'area', 'type', 'conf', 'since', 'sort', 'all'];
   const state = stateURL('?lang=fr&ui=ja&area=web&t=42', 'q=ORDA&area=database&mode=hyb', keys, 'ja');
@@ -43,7 +43,7 @@ test('ui never reinterprets source-thread lang and switching keeps complete stat
   assert.equal(params.get('t'), '42');
   assert.equal(params.get('area'), 'database');
   assert.deepEqual(parseState(state).lang, ['fr']);
-  assert.equal(new URLSearchParams(stateURL(state, '', keys, 'en')).get('ui'), null);
+  assert.equal(new URLSearchParams(stateURL(state, '', keys, 'en')).get('ui'), 'en');
 });
 
 test('browser hash exactly matches publication canonical JSON and UTF-8 SHA256', async () => {
@@ -244,7 +244,7 @@ for (const page of ['tips', 'voices']) for (const scenario of ['en', 'fr', 'ja',
     const requests = [];
     const context = {
       ...tipsCore, ...voicesCore, SORTS: page === 'tips' ? tipsCore.SORTS : voicesCore.SORTS,
-      createLocale, localeOf, localeURL, stateURL, loadOverlay, installLocale: (i18n, page) => installLocale(i18n, page, document, location), localizeDOM, modelDisclosure, KeywordIndex, rrf,
+      createLocale, localeOf, preferredLocale, localeURL, stateURL, loadOverlay, installLocale: (i18n, page) => installLocale(i18n, page, document, location), localizeDOM, modelDisclosure, KeywordIndex, rrf,
       console, document, location, URLSearchParams, Intl, setTimeout, clearTimeout,
       loadManifest: async () => manifest, loadTopics: async () => [topic], loadText: async () => {},
       decodeRun: () => new Map([[42, { area: { c: 'database', p: [0, 0, 1] }, qa: { c: 'solved', p: [.9, 0, 0, .1] } }]]),
@@ -298,7 +298,7 @@ for (const page of ['tips', 'voices']) for (const scenario of ['en', 'fr', 'ja',
       assert.ok(detail.innerHTML.includes(createLocale(locale).t('English source summary')));
       assert.ok(detail.innerHTML.includes('<span lang="en">English thread summary.</span>'));
     }
-    assert.ok(detail.innerHTML.includes(locale === 'en' ? '/?t=42' : `/?t=42&amp;ui=${locale}`));
+    assert.ok(detail.innerHTML.includes(`/requests/?t=42&amp;ui=${locale}`));
     context.query('this-word-never-appears');
     const empty = page === 'tips' ? 'Nothing found. Try other words, Semantic mode, more areas or types, or a lower confidence.'
       : 'Nothing found. Try other words, Semantic mode, or fewer filters.';
