@@ -48,15 +48,16 @@ test('Requests dictionaries preserve interpolation tokens and translate all conf
   }
 });
 
-test('Requests overlays accept wholly empty generated fields without translating the original title', async () => {
-  const topic = { id: 1, title: 'Titre original', title_en: '', line: '', para: '', lang: 'fr', tags: [] };
+test('Requests overlays normalize null or empty generated fields without translating the original title', async () => {
   const fields = { title_en: '', line: '', para: '' };
-  for (const locale of ['fr', 'ja']) {
+  for (const emptyValue of ['', null]) for (const locale of ['fr', 'ja']) {
+    const topic = { id: 1, title: 'Titre original', title_en: emptyValue, line: emptyValue, para: emptyValue, lang: 'fr', tags: [] };
     const [translated] = await applyOverlay([topic], { version: 1, page: 'requests', locale, entries: { 1: {
       translation_version: '1', source_hash: await sourceHash(fields), fields,
     } } }, 'requests', locale);
     assert.equal(translated.translationFallback, false);
     assert.equal(translated.title, topic.title);
+    for (const key of ['title_en', 'line', 'para']) assert.equal(translated[key], '');
     assert.deepEqual(translated.canonicalFields, fields);
     const [missing] = await loadOverlay([topic], 'requests', locale, async () => { throw Error('missing'); });
     assert.equal(missing.translationFallback, true);
