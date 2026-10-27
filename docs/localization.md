@@ -214,6 +214,45 @@ python3 scripts/publish_data.py publish-localization --store build/localization 
 make publish
 ```
 
+### Promoting a reviewed initial Requests corpus
+
+**Merging a code PR does not promote its draft-release translations.** Generated seeds are ignored by
+git, and Pages reads the production `data` release, not review releases. A successful Pages deployment
+can therefore expose the new Requests interface with empty locale files and English fallback. Do not
+declare the localized launch complete until the approved seed is published and verified on the public
+site. This is a separate, explicitly authorized operation; never automatically promote an unreviewed seed.
+
+After approval, download the review assets and verify `SHA256SUMS`, including the seed archive and its
+provenance. Download **fresh** production `site-data.tar.gz` and `localization.tar.gz` into
+`build/promotion-current`, extract the English archive there, and extract the reviewed portable seed
+into `build/promotion-seed`. Use a fresh destination for each promotion attempt.
+
+```sh
+python3 scripts/publish_data.py prepare-localization \
+  --data build/promotion-current/data --seeds build/promotion-seed \
+  --store build/promotion-candidate --archive build/promotion-current/localization.tar.gz
+node scripts/localize.mjs --data build/promotion-current/data --store build/promotion-candidate \
+  --check-only --require-complete --report build/promotion-preflight.json
+mkdir -p build/promotion-requests-only/fr build/promotion-requests-only/ja
+cp build/promotion-candidate/fr/requests.json build/promotion-requests-only/fr/requests.json
+cp build/promotion-candidate/ja/requests.json build/promotion-requests-only/ja/requests.json
+python3 scripts/publish_data.py publish-localization \
+  --store build/promotion-requests-only --deploy
+```
+
+Do not continue past a failed preflight. If English has changed since review, resume only the missing
+or stale Requests rows against the fresh English snapshot and recheck coverage; do not restore an old
+English archive or rerun the entire backfill. The Requests-only incoming store prevents older reviewed
+Tips/Voices rows from replacing newer production translations. The publisher rereads the current release
+inside its durable lease and checks every incoming source hash again.
+
+Wait for the dispatched Pages run to succeed. Download the newly published localization asset and compare
+the preserved Tips/Voices documents with their previous production versions. Then check the public
+`data/locales/{fr,ja}/{requests,tips,voices}.json` entry counts and current source-hash coverage, not just
+HTTP status or workflow success. Open public `/requests/?ui=fr` and `/requests/?ui=ja` and verify actual
+translated cards and detail paragraphs without English-fallback markers. Report production counts,
+the deployment run and any remaining stale rows; local artifact coverage alone is not live acceptance.
+
 Localization uploads only the independent `localization.tar.gz` release asset, with archive paths
 `data/locales/{fr,ja}/{requests,tips,voices}.json`. It re-reads both current English and current localization
 inside the shared durable Git-ref publication lease, merges successful entries by their source hashes,
