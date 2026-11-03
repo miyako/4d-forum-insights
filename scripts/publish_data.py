@@ -268,7 +268,8 @@ def corpus_hash(files):
             raise ValueError(f"Duplicate English archive member: {name}")
         seen.add(name)
         if name == "manifest.json":
-            manifest = json.loads(content)
+            # build_embeddings.mjs rewrites the manifest after sealing; JavaScript drops ".0" from integral floats.
+            manifest = json.loads(content, parse_float=lambda text: int(value) if (value := float(text)).is_integer() else value)
             for key in ("embeddings", "embedding_config"):
                 manifest.pop(key, None)
             content = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()

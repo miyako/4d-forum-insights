@@ -192,6 +192,21 @@ class PublicationTests(unittest.TestCase):
         with gh.lease():
             publisher.guard_english_publication(gh, "data", source, self.root, provenance)
 
+    def test_javascript_embeddings_rewrite_of_python_manifest_keeps_seal(self):
+        gh = FakeGitHub()
+        source = self.source()
+        manifest = source / "manifest.json"
+        manifest.write_text(json.dumps({"questions": [{"levels": [{"value": float(k)} for k in "01234"]}],
+                                        "cuts": [2.0, 1.682], "embeddings": None}))
+        provenance = self.root / "provenance.json"
+        publisher.capture_english_base(gh, "data", source, provenance, self.root)
+        publisher.seal_english_candidate(source, "data", provenance)
+        subprocess.run(["node", "-e", "const fs=require('fs'),p=process.argv[1],m=JSON.parse(fs.readFileSync(p,'utf8'));"
+                        "m.embeddings={count:1};fs.writeFileSync(p,JSON.stringify(m))", str(manifest)], check=True)
+        self.assertNotIn(".0", manifest.read_text())
+        with gh.lease():
+            publisher.guard_english_publication(gh, "data", source, self.root, provenance)
+
     def test_adopting_existing_candidate_requires_exact_current_english_content(self):
         gh = FakeGitHub()
         source = self.source()
