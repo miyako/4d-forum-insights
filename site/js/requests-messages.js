@@ -40,7 +40,6 @@ const rows = [
   ['{topics} topics from {forum}', '{topics} sujets de {forum}', '{forum}のトピック{topics}件'],
   ['{count} summarised', '{count} résumés', '要約済み{count}件'],
   ['{count} classified', '{count} classés', '分類済み{count}件'],
-  ['semantic index: {count} topics ({model}, {quant}, {dim}d)', 'index sémantique : {count} sujets ({model}, {quant}, {dim} dimensions)', '意味検索インデックス：{count}件（{model}、{quant}、{dim}次元）'],
   ['semantic index incompatible — rebuild required', 'index sémantique incompatible — régénération nécessaire', '意味検索インデックスに互換性なし — 再生成が必要'],
   ['no semantic index', 'aucun index sémantique', '意味検索インデックスなし'],
   ['data built {date}', 'données générées le {date}', 'データ生成日：{date}'],
@@ -85,6 +84,8 @@ const rows = [
   ['not classified', 'non classé', '未分類'],
   ['Language (guessed)', 'Langue (estimée)', '言語（推定）'],
   ['Has an accepted answer', 'Possède une réponse acceptée', '承認済みの回答あり'],
+  ['Hide solved topics', 'Masquer les sujets résolus', '解決済みのトピックを非表示'],
+  ['Hide closed topics', 'Masquer les sujets fermés', '終了したトピックを非表示'],
   ['✓ solved', '✓ résolu', '✓ 解決済み'],
   ['Cosine similarity to the query', 'Similarité cosinus avec la recherche', 'クエリーとのコサイン類似度'],
   ['No topics match.', 'Aucun sujet ne correspond.', '該当するトピックはありません。'],
@@ -145,7 +146,7 @@ const rows = [
   ['opinion, experience or general discussion', 'opinion, expérience ou discussion générale', '意見、経験、一般的なディスカッション'],
   ['Hidden feature requests', 'Demandes de fonctionnalités cachées', '隠れた機能リクエスト'],
   ['All topics', 'Tous les sujets', 'すべてのトピック'],
-  ['Browse every topic, including bugs, questions and other discussions', 'Parcourir tous les sujets, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含むすべてのトピックを閲覧'],
+  ['Browse every open, unsolved topic, including bugs, questions and other discussions', 'Parcourir tous les sujets ouverts et non résolus, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含む、終了しておらず未解決のすべてのトピックを閲覧'],
   ['High-band feature requests that were NOT posted in the Feature Request category', 'Demandes de tranche élevée publiées HORS de la catégorie Demandes de fonctionnalités', '機能リクエストカテゴリー以外に投稿された、高スコア帯の機能リクエスト'],
   ['Possible requests', 'Demandes possibles', 'リクエストの可能性'],
   ['Medium-band topics outside the Feature Request category: often an implicit request inside a question', 'Sujets de tranche moyenne hors de la catégorie Demandes de fonctionnalités : souvent une demande implicite dans une question', '機能リクエストカテゴリー以外の中スコア帯のトピック。質問に暗黙の要望が含まれることが多い'],
@@ -189,10 +190,12 @@ export function localizeRequestsManifest(manifest, { t }) {
   const display = (item) => Object.fromEntries(Object.entries(item).map(([key, value]) => [
     key, ['label', 'short', 'description', 'long', 'name'].includes(key) && typeof value === 'string' ? t(value) : value,
   ]));
-  const presets = manifest.presets.some((preset) => preset.id === 'all') ? manifest.presets : [{
-    id: 'all', label: 'All topics',
-    description: 'Browse every topic, including bugs, questions and other discussions', params: 'scope=all',
-  }, ...manifest.presets];
+  // The All topics description tracks the site's default filters, not the data build that wrote the manifest.
+  const all = { id: 'all', label: 'All topics',
+    description: 'Browse every open, unsolved topic, including bugs, questions and other discussions', params: 'scope=all' };
+  const presets = manifest.presets.some((preset) => preset.id === 'all')
+    ? manifest.presets.map((preset) => (preset.id === 'all' ? { ...preset, description: all.description } : preset))
+    : [all, ...manifest.presets];
   return {
     ...manifest,
     questions: manifest.questions.map((question) => {

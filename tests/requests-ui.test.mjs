@@ -65,6 +65,16 @@ test('Requests overlays normalize null or empty generated fields without transla
   }
 });
 
+test('a published All topics preset with an older description shows the current localized wording', () => {
+  const old = { id: 'all', label: 'All topics', description: 'Browse every topic, including bugs, questions and other discussions', params: 'scope=all' };
+  for (const locale of ['en', 'fr', 'ja']) {
+    const i18n = createRequestsLocale(locale);
+    const [all] = localizeRequestsManifest({ questions, presets: [old], categories: [], languages: [] }, i18n).presets;
+    assert.equal(all.description, i18n.t('Browse every open, unsolved topic, including bugs, questions and other discussions'));
+    if (locale !== 'en') assert.notEqual(all.description, old.description);
+  }
+});
+
 test('older published manifests gain one localized All topics escape hatch without changing existing presets', () => {
   const presets = site.presets.filter((preset) => preset.id !== 'all');
   for (const locale of ['en', 'fr', 'ja']) {
@@ -125,7 +135,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     const document = { body: get('body'), documentElement: element('HTML'),
       querySelector: get, getElementById: (id) => get('#' + id),
       querySelectorAll: (selector) => selector === '.modes button' ? modes : selector === '#locale-nav a' ? nav : [], addEventListener() {} };
-    const location = { pathname: '/requests/', search: `?ui=${locale}&lang=fr&tracking=keep`, hash: '#entry',
+    const location = { pathname: '/requests/', search: `?ui=${locale}&lang=fr&solved=1&tracking=keep`, hash: '#entry',
       get href() { return 'https://example.test' + this.pathname + this.search + this.hash; } };
     const calls = [];
     let modelLoads = 0;
@@ -222,7 +232,13 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     api.onModelProgress({ file: 'model', total: 1e6, loaded: .5e6 });
     assert.ok(get('#status').innerHTML.includes(i18n.t('Loading text-only EmbeddingGemma 2: {loaded} / {total} MB…',
       { loaded: i18n.decimal.format(.5), total: i18n.decimal.format(1) })));
+    assert.ok(get('#filter-body').innerHTML.includes(i18n.t('Hide solved topics')));
+    assert.ok(get('#filter-body').innerHTML.includes(i18n.t('Hide closed topics')));
     api.clearFilters();
+    assert.equal(api.app.state.xsolved, true, 'Clear filters hides solved topics again');
+    assert.equal(api.app.state.xclosed, true, 'Clear filters hides closed topics again');
+    assert.ok(!new URLSearchParams(location.search).has('solved'));
+    assert.ok(!get('#results').innerHTML.includes(expected), 'the solved fixture topic is hidden by default');
     assert.equal(new URLSearchParams(location.search).get('scope'), 'all');
     assert.ok(!new URLSearchParams(location.search).has('a.fr'));
     assert.ok(nav.every((link) => new URL(link.href, location.href).searchParams.get('scope') === 'all'));
