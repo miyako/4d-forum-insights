@@ -65,6 +65,16 @@ test('Requests overlays normalize null or empty generated fields without transla
   }
 });
 
+test('a published All topics preset with an older description shows the current localized wording', () => {
+  const old = { id: 'all', label: 'All topics', description: 'Browse every topic, including bugs, questions and other discussions', params: 'scope=all' };
+  for (const locale of ['en', 'fr', 'ja']) {
+    const i18n = createRequestsLocale(locale);
+    const [all] = localizeRequestsManifest({ questions, presets: [old], categories: [], languages: [] }, i18n).presets;
+    assert.equal(all.description, i18n.t('Browse every open, unsolved topic, including bugs, questions and other discussions'));
+    if (locale !== 'en') assert.notEqual(all.description, old.description);
+  }
+});
+
 test('older published manifests gain one localized All topics escape hatch without changing existing presets', () => {
   const presets = site.presets.filter((preset) => preset.id !== 'all');
   for (const locale of ['en', 'fr', 'ja']) {

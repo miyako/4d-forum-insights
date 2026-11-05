@@ -190,10 +190,12 @@ export function localizeRequestsManifest(manifest, { t }) {
   const display = (item) => Object.fromEntries(Object.entries(item).map(([key, value]) => [
     key, ['label', 'short', 'description', 'long', 'name'].includes(key) && typeof value === 'string' ? t(value) : value,
   ]));
-  const presets = manifest.presets.some((preset) => preset.id === 'all') ? manifest.presets : [{
-    id: 'all', label: 'All topics',
-    description: 'Browse every open, unsolved topic, including bugs, questions and other discussions', params: 'scope=all',
-  }, ...manifest.presets];
+  // The All topics description tracks the site's default filters, not the data build that wrote the manifest.
+  const all = { id: 'all', label: 'All topics',
+    description: 'Browse every open, unsolved topic, including bugs, questions and other discussions', params: 'scope=all' };
+  const presets = manifest.presets.some((preset) => preset.id === 'all')
+    ? manifest.presets.map((preset) => (preset.id === 'all' ? { ...preset, description: all.description } : preset))
+    : [all, ...manifest.presets];
   return {
     ...manifest,
     questions: manifest.questions.map((question) => {
