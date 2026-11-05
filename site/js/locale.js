@@ -78,6 +78,13 @@ export function modelDisclosure(embeddings, i18n) {
   return i18n.t('Semantic search downloads a model on first use. Keyword search does not download the model.');
 }
 
+export function semanticCredit(embeddings, i18n) {
+  const { count, model, quant, dim } = embeddings;
+  return i18n.t('semantic index: {count} topics ({model}, {quant}, {dim}d)', {
+    count: i18n.number.format(count), model: model.split('/').pop(), quant, dim: i18n.number.format(dim),
+  });
+}
+
 /** Recursively sorted object keys; array order and string contents are significant. */
 export function canonicalJSON(value) {
   if (Array.isArray(value)) return '[' + value.map(canonicalJSON).join(',') + ']';

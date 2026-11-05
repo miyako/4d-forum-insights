@@ -40,7 +40,6 @@ const rows = [
   ['{topics} topics from {forum}', '{topics} sujets de {forum}', '{forum}のトピック{topics}件'],
   ['{count} summarised', '{count} résumés', '要約済み{count}件'],
   ['{count} classified', '{count} classés', '分類済み{count}件'],
-  ['semantic index: {count} topics ({model}, {quant}, {dim}d)', 'index sémantique : {count} sujets ({model}, {quant}, {dim} dimensions)', '意味検索インデックス：{count}件（{model}、{quant}、{dim}次元）'],
   ['semantic index incompatible — rebuild required', 'index sémantique incompatible — régénération nécessaire', '意味検索インデックスに互換性なし — 再生成が必要'],
   ['no semantic index', 'aucun index sémantique', '意味検索インデックスなし'],
   ['data built {date}', 'données générées le {date}', 'データ生成日：{date}'],

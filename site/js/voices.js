@@ -4,7 +4,7 @@ import { loadManifest, loadTopics, dataUrl } from './data.js';
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
 import { rrf } from './filter.js';
-import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
+import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure, semanticCredit } from './locale.js';
 import {
   parseVoicesState, serializeVoicesState, buildVoices, debateLevel, voicesPredicates, applyVoices, sortVoices, SORTS,
 } from './voices-core.js';
@@ -179,7 +179,8 @@ function renderStatic() {
       <a href="${esc(m.forum_url)}">${esc(m.forum_url.replace(/^https?:\/\//, ''))}</a>.
       ${tr('They may be wrong or one-sided.')} ${tr('The forum posts themselves are not republished.')}${removal}
       ${tr('Data')} ${esc(dataDate(m.generated_at))}.
-      <a href="../requests/">${tr('Forum Requests')}</a> · <a href="../tips/">${tr('Forum Tips')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>`;
+      <a href="../requests/">${tr('Forum Requests')}</a> · <a href="../tips/">${tr('Forum Tips')}</a> · <a href="https://github.com/miyako/4d-forum-insights">${tr('Source')}</a></p>
+    ${app.semantic.available ? `<p class="muted">${esc(semanticCredit(m.embeddings, i18n))}</p>` : ''}`;
 
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); setQuery($('#q').value); });
   let timer;
