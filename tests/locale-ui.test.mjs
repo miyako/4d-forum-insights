@@ -11,7 +11,7 @@ import { canonical, sourceHash as buildHash } from '../scripts/localization.mjs'
 import { parseState } from '../site/js/state.js';
 import * as tipsCore from '../site/js/tips-core.js';
 import * as voicesCore from '../site/js/voices-core.js';
-import { KeywordIndex, normalize, tokenize } from '../site/js/search.js';
+import { KeywordIndex, normalize, tokenize, afterPaint } from '../site/js/search.js';
 import { rrf } from '../site/js/filter.js';
 
 const tip = { id: 42, headline: 'How to query ORDA?', body: 'Use an entity selection.', type: { key: 'solved', p: .9 } };
@@ -244,7 +244,7 @@ for (const page of ['tips', 'voices']) for (const scenario of ['en', 'fr', 'ja',
     const requests = [];
     const context = {
       ...tipsCore, ...voicesCore, SORTS: page === 'tips' ? tipsCore.SORTS : voicesCore.SORTS,
-      createLocale, localeOf, preferredLocale, localeURL, stateURL, loadOverlay, installLocale: (i18n, page) => installLocale(i18n, page, document, location), localizeDOM, modelDisclosure, KeywordIndex, rrf,
+      createLocale, localeOf, preferredLocale, localeURL, stateURL, loadOverlay, installLocale: (i18n, page) => installLocale(i18n, page, document, location), localizeDOM, modelDisclosure, KeywordIndex, afterPaint, rrf,
       console, document, location, URLSearchParams, Intl, setTimeout, clearTimeout,
       loadManifest: async () => manifest, loadTopics: async () => [topic], loadText: async () => {},
       decodeRun: () => new Map([[42, { area: { c: 'database', p: [0, 0, 1] }, qa: { c: 'solved', p: [.9, 0, 0, .1] } }]]),
@@ -269,10 +269,24 @@ for (const page of ['tips', 'voices']) for (const scenario of ['en', 'fr', 'ja',
       .replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/init\(\)\.catch\([\s\S]*$/, '');
     vm.runInNewContext(source + `
       globalThis.ready = init(); globalThis.detail = renderWhy; globalThis.query = setQuery;
+      globalThis.indexed = () => app.indexReady; globalThis.hasIndex = () => !!app.index;
       globalThis.progress = onModelProgress;
       globalThis.unavailable = () => { app.sem.error = 'offline'; app.state.mode = 'hyb'; update({ history: false }); };
     `, context);
     await context.ready;
+    if (page === 'tips') {
+      assert.equal(context.hasIndex(), false, 'first render does not wait for the keyword index');
+      assert.match(get('#count').innerHTML, /<strong>/);
+      context.query('database');
+      assert.equal(get('#count').textContent, createLocale(locale).t('Loading…'), 'a query before the index is ready waits');
+      get('#count').innerHTML = '';
+    }
+    await context.indexed();
+    if (page === 'tips') {
+      assert.match(get('#count').innerHTML, /<strong>/, 'the pending query re-runs once the index is ready');
+      context.query('');
+    }
+    assert.equal(context.hasIndex(), true);
     const html = get('#results').innerHTML;
     assert.match(html, /Titre original &lt;4D&gt;/);
     const expected = noEntry ? topic.title_en : locale === 'en' || stale ? page === 'tips' ? tip.headline : voice.question

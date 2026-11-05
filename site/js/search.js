@@ -5,15 +5,45 @@ import MiniSearch from '../vendor/minisearch.js';
 const CJK = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
 const SPLIT = /[\s\p{P}\p{S}]+/u;
 
-export function normalize(term) {
+const ASCII = /^[\x00-\x7f]*$/;
+const NORM_CACHE_MAX = 50000;
+const NORM_TERM_MAX = 64;
+const normCache = new Map();
+
+function normalizeUncached(term) {
   // Fold Latin accents, not Japanese dakuten: バ and ハ are different search terms.
+  // Unicode normalization is the identity on ASCII, so only lower-casing remains.
+  if (ASCII.test(term)) return term.toLowerCase();
   return term.normalize('NFKC').normalize('NFD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1').normalize('NFC').toLowerCase();
+}
+
+/** Memoized for short strings: indexing normalizes every token, and tokens repeat heavily. */
+export function normalize(term) {
+  if (term.length > NORM_TERM_MAX) return normalizeUncached(term);
+  let out = normCache.get(term);
+  if (out === undefined) {
+    if (normCache.size >= NORM_CACHE_MAX) normCache.clear();
+    out = normalizeUncached(term);
+    normCache.set(term, out);
+  }
+  return out;
+}
+
+/** Resolves after the next paint (or a short timeout where frames are throttled or unavailable). */
+export function afterPaint(win = globalThis) {
+  return new Promise((resolve) => {
+    let done = false;
+    const go = () => { if (!done) { done = true; resolve(); } };
+    if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 50);
+  });
 }
 
 /** Words for Latin scripts; overlapping character bigrams for CJK runs (no spaces between words). */
 export function tokenize(text) {
   const out = [];
-  for (const tok of String(text || '').normalize('NFKC').split(SPLIT)) {
+  const str = String(text || '');
+  for (const tok of (ASCII.test(str) ? str : str.normalize('NFKC')).split(SPLIT)) {
     if (!tok) continue;
     if (!CJK.test(tok)) { out.push(tok); continue; }
     for (const part of tok.split(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+)/)) {
@@ -50,23 +80,39 @@ function options(fields) {
   };
 }
 
+const BASE_FIELDS = ['title', 'title_en', 'line', 'tags', 'fallback'];
+const FULL_FIELDS = ['title', 'title_en', 'line', 'tags', 'para', 'fallback'];
+const CHUNK = 500;
+
 export class KeywordIndex {
-  constructor(topics) {
+  /** Builds synchronously unless `build: false` (see KeywordIndex.create for the non-blocking build). */
+  constructor(topics, { build = true } = {}) {
     this.sourceTopics = new Map(topics.map(topic => [topic.id, topic]));
     this.topics = topics.map(topic => ({ ...topic, fallback: topic.canonicalFields
       ? Object.values(topic.canonicalFields).flat().join(' ') : '' }));
     this.byId = new Map(this.topics.map((t) => [t.id, t]));
-    this.index = new MiniSearch(options(['title', 'title_en', 'line', 'tags', 'fallback']));
-    this.index.addAll(this.topics);
+    this.index = new MiniSearch(options(BASE_FIELDS));
+    if (build) this.index.addAll(this.topics);
     this.full = false;
+  }
+
+  /**
+   * Builds in chunks that yield to the event loop, so the page stays responsive. With `paragraphs`
+   * the summary paragraphs are indexed in the same pass (equivalent to the constructor + addParagraphs()).
+   */
+  static async create(topics, { paragraphs = false } = {}) {
+    const ki = new KeywordIndex(topics, { build: false });
+    if (paragraphs) await ki.addParagraphs();
+    else await ki.index.addAllAsync(ki.topics, { chunkSize: CHUNK });
+    return ki;
   }
 
   /** Rebuild with the summary paragraphs in the background, then swap. */
   async addParagraphs() {
-    const idx = new MiniSearch(options(['title', 'title_en', 'line', 'tags', 'para', 'fallback']));
+    const idx = new MiniSearch(options(FULL_FIELDS));
     // Paragraphs may have been attached after the first index build.
     for (const topic of this.topics) topic.para = this.sourceTopics.get(topic.id).para;
-    await idx.addAllAsync(this.topics, { chunkSize: 500 });
+    await idx.addAllAsync(this.topics, { chunkSize: CHUNK });
     this.index = idx;
     this.full = true;
   }
