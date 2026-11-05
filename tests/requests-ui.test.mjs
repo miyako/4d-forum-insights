@@ -125,7 +125,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     const document = { body: get('body'), documentElement: element('HTML'),
       querySelector: get, getElementById: (id) => get('#' + id),
       querySelectorAll: (selector) => selector === '.modes button' ? modes : selector === '#locale-nav a' ? nav : [], addEventListener() {} };
-    const location = { pathname: '/requests/', search: `?ui=${locale}&lang=fr&tracking=keep`, hash: '#entry',
+    const location = { pathname: '/requests/', search: `?ui=${locale}&lang=fr&solved=1&tracking=keep`, hash: '#entry',
       get href() { return 'https://example.test' + this.pathname + this.search + this.hash; } };
     const calls = [];
     let modelLoads = 0;
@@ -218,7 +218,11 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     api.onModelProgress({ file: 'model', total: 1e6, loaded: .5e6 });
     assert.ok(get('#status').innerHTML.includes(i18n.t('Loading text-only EmbeddingGemma 2: {loaded} / {total} MB…',
       { loaded: i18n.decimal.format(.5), total: i18n.decimal.format(1) })));
+    assert.ok(get('#filter-body').innerHTML.includes(i18n.t('Hide solved topics')));
     api.clearFilters();
+    assert.equal(api.app.state.xsolved, true, 'Clear filters hides solved topics again');
+    assert.ok(!new URLSearchParams(location.search).has('solved'));
+    assert.ok(!get('#results').innerHTML.includes(expected), 'the solved fixture topic is hidden by default');
     assert.equal(new URLSearchParams(location.search).get('scope'), 'all');
     assert.ok(!new URLSearchParams(location.search).has('a.fr'));
     assert.ok(nav.every((link) => new URL(link.href, location.href).searchParams.get('scope') === 'all'));

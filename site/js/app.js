@@ -20,7 +20,7 @@ const score = (value) => decimal.format(value);
 const stateDate = (value) => Number.isFinite(dateToDays(value)) ? fmtDate(dateToDays(value)) : value;
 installLocale(i18n, 'requests');
 document.title = tr('4D Forum Requests');
-const STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', 'cat', 'xcat', 'lang', 'tag', 'from', 'to', 'votes', 'cls', 'enriched', 'scope'];
+const STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', 'cat', 'xcat', 'lang', 'tag', 'from', 'to', 'votes', 'cls', 'enriched', 'solved', 'scope'];
 const noulLabel = (key) => tr({
   yes: 'Yes (≥ {percent})', strong: 'Strong yes (≥ {percent})', no: 'No (< {percent})',
 }[key] || key, { percent: pct(key === 'strong' ? .8 : .5) });
@@ -287,6 +287,7 @@ function syncControls() {
   $('[name=votes]', f).value = s.votes || '';
   $('[name=cls]', f).checked = s.cls;
   $('[name=enriched]', f).checked = s.enriched;
+  $('[name=xsolved]', f).checked = s.xsolved;
   const frCat = app.manifest.feature_request_category;
   $('[name=hidefr]', f).checked = s.xcat.includes(String(frCat));
 }
@@ -328,8 +329,9 @@ function renderFilterShell() {
     ${section(tr('Created'), `<div class="dates"><label>${esc(tr('From'))} <input type="date" name="from"></label><label>${esc(tr('To'))} <input type="date" name="to"></label></div>
       <div class="quick">${[1, 2, 5].map((y) => `<button type="button" class="link" data-years="${y}">${esc(tr(y === 1 ? 'last {count} yr' : 'last {count} yrs', { count: num.format(y) }))}</button>`).join(' ')}</div>`, '', false)}
     ${section(tr('Votes'), `<label class="opt">${esc(tr('At least'))} <input type="number" min="0" name="votes" class="num"> ${esc(tr('votes'))}</label>`, '', false)}
-    ${section(tr('Status'), `<label class="opt"><input type="checkbox" name="cls"> ${esc(tr('Classified by the model run'))}</label>
-      <label class="opt"><input type="checkbox" name="enriched"> ${esc(tr('Has an English summary'))}</label>`, '', false)}`;
+    ${section(tr('Status'), `<label class="opt toggle"><input type="checkbox" name="xsolved"> ${esc(tr('Hide solved topics'))}</label>
+      <label class="opt"><input type="checkbox" name="cls"> ${esc(tr('Classified by the model run'))}</label>
+      <label class="opt"><input type="checkbox" name="enriched"> ${esc(tr('Has an English summary'))}</label>`)}`;
   const f = $('#filter-body');
   f.onchange = onFilterChange;
   f.oninput = (e) => {
@@ -362,21 +364,27 @@ function onFilterChange(e) {
       const i = list.indexOf(el.value);
       if (el.checked && i < 0) list.push(el.value);
       if (!el.checked && i >= 0) list.splice(i, 1);
+      // "only" and "hide" for the same category would match nothing
+      if (facet === 'cat' && el.checked) s.xcat = s.xcat.filter((x) => x !== el.value);
     }
+    if (facet === 'cat') $('[name=hidefr]', $('#filter-body')).checked = s.xcat.includes(String(app.manifest.feature_request_category));
   } else if (el.name === 'hidefr') {
     const fr = String(app.manifest.feature_request_category);
     s.xcat = s.xcat.filter((x) => x !== fr);
-    if (el.checked) s.xcat.push(fr);
+    if (el.checked) {
+      s.xcat.push(fr);
+      s.cat = s.cat.filter((x) => x !== fr);
+    }
   } else if (el.name === 'from' || el.name === 'to') s[el.name] = el.value;
   else if (el.name === 'votes') s.votes = Math.max(0, Number(el.value) || 0);
-  else if (el.name === 'cls' || el.name === 'enriched') s[el.name] = el.checked;
+  else if (el.name === 'cls' || el.name === 'enriched' || el.name === 'xsolved') s[el.name] = el.checked;
   else return;
   update();
 }
 
 function clearFilters() {
   const s = app.state;
-  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, ans: {}, scope: 'all' });
+  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, xsolved: true, ans: {}, scope: 'all' });
   syncControls();
   update();
 }

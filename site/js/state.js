@@ -1,6 +1,7 @@
 // Search state ⇄ query string, so every view is shareable.
 //   q, mode (kw|hyb|sem), sort, run, view (list|table), t (open topic),
 //   cat, xcat, lang, tag (comma lists), from, to (YYYY-MM-DD), votes, cls=1, enriched=1,
+//   solved=1 (include topics with an accepted answer; hidden by default),
 //   a.<question>=… (score bands or levels / choices as comma list; noul: yes|strong|no)
 
 const LISTS = ['cat', 'xcat', 'lang', 'tag'];
@@ -9,7 +10,7 @@ export function emptyState() {
   return {
     q: '', mode: 'kw', sort: '', run: '', view: 'list', t: null,
     cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false,
-    ans: {}, scope: '',
+    xsolved: true, ans: {}, scope: '',
   };
 }
 
@@ -31,6 +32,7 @@ export function parseState(search, questions = []) {
   s.votes = Number(p.get('votes')) || 0;
   s.cls = p.get('cls') === '1';
   s.enriched = p.get('enriched') === '1';
+  s.xsolved = p.get('solved') !== '1';
   const types = Object.fromEntries(questions.map((q) => [q.id, q.type]));
   for (const [k, v] of p) {
     if (!k.startsWith('a.')) continue;
@@ -51,6 +53,7 @@ export function serializeState(s) {
   if (s.votes) p.set('votes', String(s.votes));
   if (s.cls) p.set('cls', '1');
   if (s.enriched) p.set('enriched', '1');
+  if (!s.xsolved) p.set('solved', '1');
   for (const [qid, v] of Object.entries(s.ans)) {
     if (Array.isArray(v) ? v.length : v) p.set('a.' + qid, Array.isArray(v) ? v.join(',') : v);
   }
@@ -62,7 +65,7 @@ export function serializeState(s) {
 }
 
 export const REQUEST_STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', ...LISTS,
-  'from', 'to', 'votes', 'cls', 'enriched', 'scope'];
+  'from', 'to', 'votes', 'cls', 'enriched', 'solved', 'scope'];
 
 /** Only an unfiltered new visit gets the Requests preset; old/shared intent wins. */
 export function parseRequestsState(search, questions = [], presets = []) {

@@ -84,6 +84,7 @@ const rows = [
   ['not classified', 'non classé', '未分類'],
   ['Language (guessed)', 'Langue (estimée)', '言語（推定）'],
   ['Has an accepted answer', 'Possède une réponse acceptée', '承認済みの回答あり'],
+  ['Hide solved topics', 'Masquer les sujets résolus', '解決済みのトピックを非表示'],
   ['✓ solved', '✓ résolu', '✓ 解決済み'],
   ['Cosine similarity to the query', 'Similarité cosinus avec la recherche', 'クエリーとのコサイン類似度'],
   ['No topics match.', 'Aucun sujet ne correspond.', '該当するトピックはありません。'],
