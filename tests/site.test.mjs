@@ -45,6 +45,17 @@ test('solved topics are hidden by default; solved=1 includes them', () => {
   assert.deepEqual(applyFilters(list, buildPredicates(all, ctx)).map((t) => t.id), [1, 2]);
 });
 
+test('closed topics are hidden by default; closed=1 includes them', () => {
+  const list = [{ id: 1, flags: 1 }, { id: 2, flags: 0 }];
+  const ctx = { questions: [], flags: { accepted: 4, closed: 1 } };
+  const def = parseState('');
+  assert.equal(def.xclosed, true);
+  assert.deepEqual(applyFilters(list, buildPredicates(def, ctx)).map((t) => t.id), [2]);
+  const all = parseState('closed=1&solved=1');
+  assert.equal(serializeState(all), 'solved=1&closed=1');
+  assert.deepEqual(applyFilters(list, buildPredicates(all, ctx)).map((t) => t.id), [1, 2]);
+});
+
 test('unknown questions in the URL are kept (manifest-driven, no code changes)', () => {
   const s = parseState('a.impact=high,medium', QUESTIONS);
   assert.deepEqual(s.ans.impact, ['high', 'medium']);

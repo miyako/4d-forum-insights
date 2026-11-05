@@ -20,7 +20,7 @@ const score = (value) => decimal.format(value);
 const stateDate = (value) => Number.isFinite(dateToDays(value)) ? fmtDate(dateToDays(value)) : value;
 installLocale(i18n, 'requests');
 document.title = tr('4D Forum Requests');
-const STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', 'cat', 'xcat', 'lang', 'tag', 'from', 'to', 'votes', 'cls', 'enriched', 'solved', 'scope'];
+const STATE_KEYS = ['q', 'mode', 'sort', 'run', 'view', 't', 'cat', 'xcat', 'lang', 'tag', 'from', 'to', 'votes', 'cls', 'enriched', 'solved', 'closed', 'scope'];
 const noulLabel = (key) => tr({
   yes: 'Yes (≥ {percent})', strong: 'Strong yes (≥ {percent})', no: 'No (< {percent})',
 }[key] || key, { percent: pct(key === 'strong' ? .8 : .5) });
@@ -288,6 +288,7 @@ function syncControls() {
   $('[name=cls]', f).checked = s.cls;
   $('[name=enriched]', f).checked = s.enriched;
   $('[name=xsolved]', f).checked = s.xsolved;
+  $('[name=xclosed]', f).checked = s.xclosed;
   const frCat = app.manifest.feature_request_category;
   $('[name=hidefr]', f).checked = s.xcat.includes(String(frCat));
 }
@@ -330,6 +331,7 @@ function renderFilterShell() {
       <div class="quick">${[1, 2, 5].map((y) => `<button type="button" class="link" data-years="${y}">${esc(tr(y === 1 ? 'last {count} yr' : 'last {count} yrs', { count: num.format(y) }))}</button>`).join(' ')}</div>`, '', false)}
     ${section(tr('Votes'), `<label class="opt">${esc(tr('At least'))} <input type="number" min="0" name="votes" class="num"> ${esc(tr('votes'))}</label>`, '', false)}
     ${section(tr('Status'), `<label class="opt toggle"><input type="checkbox" name="xsolved"> ${esc(tr('Hide solved topics'))}</label>
+      <label class="opt toggle"><input type="checkbox" name="xclosed"> ${esc(tr('Hide closed topics'))}</label>
       <label class="opt"><input type="checkbox" name="cls"> ${esc(tr('Classified by the model run'))}</label>
       <label class="opt"><input type="checkbox" name="enriched"> ${esc(tr('Has an English summary'))}</label>`)}`;
   const f = $('#filter-body');
@@ -377,14 +379,14 @@ function onFilterChange(e) {
     }
   } else if (el.name === 'from' || el.name === 'to') s[el.name] = el.value;
   else if (el.name === 'votes') s.votes = Math.max(0, Number(el.value) || 0);
-  else if (el.name === 'cls' || el.name === 'enriched' || el.name === 'xsolved') s[el.name] = el.checked;
+  else if (el.name === 'cls' || el.name === 'enriched' || el.name === 'xsolved' || el.name === 'xclosed') s[el.name] = el.checked;
   else return;
   update();
 }
 
 function clearFilters() {
   const s = app.state;
-  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, xsolved: true, ans: {}, scope: 'all' });
+  Object.assign(s, { cat: [], xcat: [], lang: [], tag: [], from: '', to: '', votes: 0, cls: false, enriched: false, xsolved: true, xclosed: true, ans: {}, scope: 'all' });
   syncControls();
   update();
 }

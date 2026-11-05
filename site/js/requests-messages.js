@@ -85,6 +85,7 @@ const rows = [
   ['Language (guessed)', 'Langue (estimée)', '言語（推定）'],
   ['Has an accepted answer', 'Possède une réponse acceptée', '承認済みの回答あり'],
   ['Hide solved topics', 'Masquer les sujets résolus', '解決済みのトピックを非表示'],
+  ['Hide closed topics', 'Masquer les sujets fermés', '終了したトピックを非表示'],
   ['✓ solved', '✓ résolu', '✓ 解決済み'],
   ['Cosine similarity to the query', 'Similarité cosinus avec la recherche', 'クエリーとのコサイン類似度'],
   ['No topics match.', 'Aucun sujet ne correspond.', '該当するトピックはありません。'],
@@ -145,7 +146,7 @@ const rows = [
   ['opinion, experience or general discussion', 'opinion, expérience ou discussion générale', '意見、経験、一般的なディスカッション'],
   ['Hidden feature requests', 'Demandes de fonctionnalités cachées', '隠れた機能リクエスト'],
   ['All topics', 'Tous les sujets', 'すべてのトピック'],
-  ['Browse every unsolved topic, including bugs, questions and other discussions', 'Parcourir tous les sujets non résolus, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含む、未解決のすべてのトピックを閲覧'],
+  ['Browse every open, unsolved topic, including bugs, questions and other discussions', 'Parcourir tous les sujets ouverts et non résolus, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含む、終了しておらず未解決のすべてのトピックを閲覧'],
   ['High-band feature requests that were NOT posted in the Feature Request category', 'Demandes de tranche élevée publiées HORS de la catégorie Demandes de fonctionnalités', '機能リクエストカテゴリー以外に投稿された、高スコア帯の機能リクエスト'],
   ['Possible requests', 'Demandes possibles', 'リクエストの可能性'],
   ['Medium-band topics outside the Feature Request category: often an implicit request inside a question', 'Sujets de tranche moyenne hors de la catégorie Demandes de fonctionnalités : souvent une demande implicite dans une question', '機能リクエストカテゴリー以外の中スコア帯のトピック。質問に暗黙の要望が含まれることが多い'],
@@ -191,7 +192,7 @@ export function localizeRequestsManifest(manifest, { t }) {
   ]));
   const presets = manifest.presets.some((preset) => preset.id === 'all') ? manifest.presets : [{
     id: 'all', label: 'All topics',
-    description: 'Browse every unsolved topic, including bugs, questions and other discussions', params: 'scope=all',
+    description: 'Browse every open, unsolved topic, including bugs, questions and other discussions', params: 'scope=all',
   }, ...manifest.presets];
   return {
     ...manifest,

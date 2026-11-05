@@ -219,8 +219,10 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     assert.ok(get('#status').innerHTML.includes(i18n.t('Loading text-only EmbeddingGemma 2: {loaded} / {total} MB…',
       { loaded: i18n.decimal.format(.5), total: i18n.decimal.format(1) })));
     assert.ok(get('#filter-body').innerHTML.includes(i18n.t('Hide solved topics')));
+    assert.ok(get('#filter-body').innerHTML.includes(i18n.t('Hide closed topics')));
     api.clearFilters();
     assert.equal(api.app.state.xsolved, true, 'Clear filters hides solved topics again');
+    assert.equal(api.app.state.xclosed, true, 'Clear filters hides closed topics again');
     assert.ok(!new URLSearchParams(location.search).has('solved'));
     assert.ok(!get('#results').innerHTML.includes(expected), 'the solved fixture topic is hidden by default');
     assert.equal(new URLSearchParams(location.search).get('scope'), 'all');

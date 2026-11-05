@@ -42,6 +42,7 @@ export function buildPredicates(state, ctx) {
   if (state.cls) add('cls', (t) => t.ans != null);
   if (state.enriched) add('enriched', (t) => (t.flags & ctx.flags.enriched) !== 0);
   if (state.xsolved) add('solved', (t) => (t.flags & ctx.flags.accepted) === 0);
+  if (state.xclosed) add('closed', (t) => (t.flags & ctx.flags.closed) === 0);
   for (const q of ctx.questions) {
     const v = state.ans[q.id];
     if (!v || (Array.isArray(v) && !v.length)) continue;
