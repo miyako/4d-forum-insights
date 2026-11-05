@@ -145,7 +145,7 @@ const rows = [
   ['opinion, experience or general discussion', 'opinion, expérience ou discussion générale', '意見、経験、一般的なディスカッション'],
   ['Hidden feature requests', 'Demandes de fonctionnalités cachées', '隠れた機能リクエスト'],
   ['All topics', 'Tous les sujets', 'すべてのトピック'],
-  ['Browse every topic, including bugs, questions and other discussions', 'Parcourir tous les sujets, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含むすべてのトピックを閲覧'],
+  ['Browse every unsolved topic, including bugs, questions and other discussions', 'Parcourir tous les sujets non résolus, y compris les bugs, questions et autres discussions', '不具合、質問、その他のディスカッションを含む、未解決のすべてのトピックを閲覧'],
   ['High-band feature requests that were NOT posted in the Feature Request category', 'Demandes de tranche élevée publiées HORS de la catégorie Demandes de fonctionnalités', '機能リクエストカテゴリー以外に投稿された、高スコア帯の機能リクエスト'],
   ['Possible requests', 'Demandes possibles', 'リクエストの可能性'],
   ['Medium-band topics outside the Feature Request category: often an implicit request inside a question', 'Sujets de tranche moyenne hors de la catégorie Demandes de fonctionnalités : souvent une demande implicite dans une question', '機能リクエストカテゴリー以外の中スコア帯のトピック。質問に暗黙の要望が含まれることが多い'],
@@ -191,7 +191,7 @@ export function localizeRequestsManifest(manifest, { t }) {
   ]));
   const presets = manifest.presets.some((preset) => preset.id === 'all') ? manifest.presets : [{
     id: 'all', label: 'All topics',
-    description: 'Browse every topic, including bugs, questions and other discussions', params: 'scope=all',
+    description: 'Browse every unsolved topic, including bugs, questions and other discussions', params: 'scope=all',
   }, ...manifest.presets];
   return {
     ...manifest,

@@ -10,7 +10,7 @@
     {
       "id": "all",
       "label": "All topics",
-      "description": "Browse every topic, including bugs, questions and other discussions",
+      "description": "Browse every unsolved topic, including bugs, questions and other discussions",
       "params": "scope=all"
     },
     {
