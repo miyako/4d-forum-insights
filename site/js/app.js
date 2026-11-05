@@ -5,7 +5,7 @@ import { parseState, parseRequestsState, serializeState, hasFilters } from './st
 import {
   buildPredicates, applyFilters, facetCounts, sortOptions, sortTopics, rrf, NOUL_FILTERS, dateToDays,
 } from './filter.js';
-import { KeywordIndex, normalize } from './search.js';
+import { KeywordIndex, normalize, afterPaint } from './search.js';
 import { Semantic } from './semantic.js';
 import { preferredLocale, localeURL, navigationURL, stateURL, installLocale, loadOverlay } from './locale.js';
 import { createRequestsLocale, localizeRequestsManifest } from './requests-messages.js';
@@ -47,20 +47,25 @@ async function init() {
   document.title = tr('4D Forum Requests');
   m.categories.forEach((c) => app.cats.set(c.id, c));
   app.state = parseRequestsState(location.search, m.questions, m.presets);
-  app.topics = await loadTopics(m);
+  // Fetch the answers of the initial run alongside topics and text (loadRun caches the promise).
+  const initialRun = m.runs.find((r) => r.id === app.state.run) || m.runs.find((r) => r.id === m.default_run) || m.runs[0];
+  if (initialRun) loadRun(m, initialRun.id).catch(() => {});
+  const topics = await loadTopics(m);
+  const text = loadText(m, topics).then(() => { app.textLoaded = true; });
   // Hash all generated fields together before applying an overlay, including empty paragraphs.
-  await loadText(m, app.topics);
-  app.textLoaded = true;
-  app.topics = await loadOverlay(app.topics, 'requests', i18n.locale, getJSON);
+  // English needs no overlay, so its paragraphs (detail panel, full index) load in the background.
+  if (i18n.locale !== 'en') await text;
+  else text.then(() => { if (app.rendered && app.state.t) renderDetail(app.state.t); }, (e) => console.warn('text.json', e));
+  app.topics = await loadOverlay(topics, 'requests', i18n.locale, getJSON);
   app.topics.forEach((t) => app.byId.set(t.id, t));
   app.semantic = new Semantic(m.embeddings);
   app.semantic.onProgress = onModelProgress;
   await selectRun(app.state.run);
-  app.index = new KeywordIndex(app.topics);
-  await app.index.addParagraphs();
 
   renderStatic();
   update({ replace: true });
+  app.rendered = true;
+  app.indexReady = buildIndex(text).catch((e) => console.error('keyword index', e));
   if (app.state.mode !== 'kw') startSemantic();
   if (app.state.t) openDetail(app.state.t, { push: false });
 
@@ -74,6 +79,27 @@ async function init() {
     if (app.state.mode !== 'kw') startSemantic();
     app.state.t ? openDetail(app.state.t, { push: false }) : closeDetail({ push: false });
   });
+}
+
+/**
+ * The keyword index is built after the first render (results need it only for a query). Queries
+ * shown meanwhile display "Loading…" and re-run when the index — and later its paragraphs — is ready.
+ */
+async function buildIndex(text) {
+  await afterPaint();
+  if (app.textLoaded) {
+    app.index = await KeywordIndex.create(app.topics, { paragraphs: true });
+  } else {
+    app.index = await KeywordIndex.create(app.topics);
+    refreshQuery();
+    try { await text; } catch { return; }
+    await app.index.addParagraphs();
+  }
+  refreshQuery();
+}
+
+function refreshQuery() {
+  if (app.state.q.trim()) update({ history: false, keepPage: true });
 }
 
 async function selectRun(runId) {
@@ -105,6 +131,7 @@ function candidates() {
   const semReady = wantSem && app.sem.q === q && app.sem.list;
   let kw = [];
   if (s.mode !== 'sem' || !semReady) {
+    if (!app.index) return { pending: true };
     kw = app.index.search(q);
     app.terms = [...new Set(kw.slice(0, 200).flatMap((r) => r.terms))];
     app.terms.push(...q.split(/\s+/).filter((w) => w.length > 1 && !w.startsWith('-')).map((w) => normalize(w.replace(/"/g, ''))));
@@ -139,7 +166,13 @@ function update({ replace = false, history = true, keepPage = false } = {}) {
   // filter/search changes replace the current history entry; opening a topic pushes one (Back closes it)
   if (history || replace) window.history.replaceState(null, '', urlFor(s));
   refreshLocaleLinks();
-  const { base, relevance, sim, note } = candidates();
+  const { base, relevance, sim, note, pending } = candidates();
+  if (pending) {
+    $('#count').textContent = tr('Loading…');
+    $('#results').innerHTML = '';
+    $('#more').innerHTML = '';
+    return;
+  }
   const ctx = { questions: app.questions, flags: app.manifest.flags };
   const preds = buildPredicates(s, ctx);
   const filtered = applyFilters(base, preds);

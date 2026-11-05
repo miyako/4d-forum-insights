@@ -1,7 +1,7 @@
 // /tips/: a knowledge base mined from the forum. Topics are classified by area and Q&A type (the "tips-…" model
 // run, manifest.tips) and the answered questions and tips are rewritten into short entries (tips/entries.json).
 import { loadManifest, loadTopics, loadText, dataUrl, decodeRun } from './data.js';
-import { KeywordIndex } from './search.js';
+import { KeywordIndex, afterPaint } from './search.js';
 import { Semantic } from './semantic.js';
 import { rrf } from './filter.js';
 import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure } from './locale.js';
@@ -62,17 +62,13 @@ async function init() {
   app.run = run;
   app.topicCount = topics.length;
 
-  // keyword index over what the page shows: entry headline/body, original title, tags
-  app.index = new KeywordIndex(app.items.map((it) => ({
-    id: it.id, title: it.headline, title_en: [it.canonicalFields?.headline, it.topic.title_en, it.topic.title].filter(Boolean).join(' '),
-    line: [it.body, it.canonicalFields?.body].filter(Boolean).join(' '), tags: it.topic.tags,
-  })));
   app.semantic = new Semantic(m.embeddings);
   app.semantic.onProgress = onModelProgress;
 
   renderStatic();
   syncControls();
   update({ replace: true });
+  app.indexReady = buildIndex().catch((e) => console.error('keyword index', e));
   if (app.state.mode !== 'kw') startSemantic();
   loadText(m, topics).then(() => { app.textLoaded = true; }).catch((e) => console.warn('text.json', e));
 
@@ -83,6 +79,19 @@ async function init() {
     update({ history: false });
     if (app.state.mode !== 'kw') startSemantic();
   });
+}
+
+/**
+ * Keyword index over what the page shows (entry headline/body, original title, tags), built after
+ * the first render; a query shown meanwhile displays "Loading…" and re-runs once it is ready.
+ */
+async function buildIndex() {
+  await afterPaint();
+  app.index = await KeywordIndex.create(app.items.map((it) => ({
+    id: it.id, title: it.headline, title_en: [it.canonicalFields?.headline, it.topic.title_en, it.topic.title].filter(Boolean).join(' '),
+    line: [it.body, it.canonicalFields?.body].filter(Boolean).join(' '), tags: it.topic.tags,
+  })));
+  if (app.state.q.trim()) update({ history: false, keepPage: true });
 }
 
 function fail(html) {
@@ -101,6 +110,7 @@ function candidates() {
   const semReady = wantSem && app.sem.q === q && app.sem.list;
   let kw = [];
   if (s.mode !== 'sem' || !semReady) {
+    if (!app.index) return { pending: true };
     kw = app.index.search(q);
     app.terms = [...new Set(kw.slice(0, 200).flatMap((r) => r.terms))];
   }
@@ -155,7 +165,14 @@ function update({ replace = false, history = true, keepPage = false } = {}) {
     if (url !== location.pathname + location.search + location.hash) (replace ? window.history.replaceState : window.history.pushState).call(window.history, null, '', url);
   }
   if (!keepPage) app.shown = PAGE;
-  const { base, relevance, note } = candidates();
+  const { base, relevance, note, pending } = candidates();
+  if (pending) {
+    $('#count').textContent = tr('Loading…');
+    $('#results').innerHTML = '';
+    $('#more').innerHTML = '';
+    installLocale(i18n, 'tips');
+    return;
+  }
   const preds = tipsPredicates(s);
   const sort = s.sort && (s.sort !== 'relevance' || relevance) ? s.sort : (relevance ? 'relevance' : 'new');
   app.results = sortTips(applyTips(base, preds), sort, relevance);

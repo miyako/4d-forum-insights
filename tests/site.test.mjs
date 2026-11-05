@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyState, parseState, serializeState, hasFilters } from '../site/js/state.js';
 import { buildPredicates, applyFilters, facetCounts, sortTopics, rrf, dateToDays, daysToDate } from '../site/js/filter.js';
-import { tokenize, normalize, KeywordIndex } from '../site/js/search.js';
+import { tokenize, normalize, KeywordIndex, afterPaint } from '../site/js/search.js';
 import { decodeAnswer, decodeRun, bandOf } from '../site/js/data.js';
 import { topK } from '../site/js/semantic.js';
 
@@ -164,6 +164,39 @@ test('keyword index: AND, OR fallback, exclusion and phrases', () => {
   assert.deepEqual(ids('"web server"'), [2]);
   assert.deepEqual(ids('sessions zzzunknown'), [2], 'falls back to OR');
   assert.deepEqual(ids('exporter'), [3]);
+});
+
+test('memoized normalize and ASCII fast paths match the uncached Unicode pipeline', () => {
+  const reference = (term) => term.normalize('NFKC').normalize('NFD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1').normalize('NFC').toLowerCase();
+  const terms = ['Entités', 'ENTITÉS', 'Ｄａｔａ', 'ﬁle', 'ﾃﾞｰﾀﾍﾞｰｽ', 'カ\u3099イド', 'ガイド', 'バ', 'ハ', 'パ', 'Straße', 'İstanbul',
+    'Crème Brûlée', 'ORDA', 'web', '4D', 'naïve', 'Œuvre', 'Å', 'x'.repeat(200) + 'É', 'é'.repeat(80), '', '日本語の段落', 'ŉ', 'Ǆ'];
+  for (let pass = 0; pass < 3; pass++) for (const term of terms) assert.equal(normalize(term), reference(term), term);
+  for (let i = 0; i < 60000; i++) normalize('t' + i + (i % 2 ? 'é' : ''));  // overflows and clears the bounded cache
+  for (const term of terms) assert.equal(normalize(term), reference(term), term);
+  assert.deepEqual(tokenize('ﾃﾞｰﾀ ﬁle'), ['デー', 'ータ', 'file']);
+  assert.deepEqual(tokenize('plain ascii, words-only'), ['plain', 'ascii', 'words', 'only']);
+});
+
+test('non-blocking KeywordIndex.create ranks exactly like the synchronous build', async () => {
+  const words = 'web server pdf print export entités session orda query form list sort ﾃﾞｰﾀﾍﾞｰｽ 印刷 データベース'.split(' ');
+  const pick = (i, n) => Array.from({ length: n }, (_, k) => words[(i * 7 + k * 3) % words.length]).join(' ');
+  const docs = Array.from({ length: 1200 }, (_, i) => ({ id: i + 1, title: pick(i, 4), title_en: i % 3 ? pick(i + 1, 3) : null,
+    line: pick(i + 2, 8), tags: i % 5 ? [] : ['web'], para: pick(i + 3, 20) }));
+  const queries = ['web pdf', 'pdf -print', '"web server"', 'entites', 'データ', 'ﾃﾞｰﾀ', 'sessio', 'sort zzz'];
+  const sync = new KeywordIndex(docs);
+  const lazy = await KeywordIndex.create(docs);
+  for (const q of queries) assert.deepEqual(lazy.search(q), sync.search(q), q);
+  await sync.addParagraphs();
+  const full = await KeywordIndex.create(docs, { paragraphs: true });
+  assert.equal(full.full, true);
+  for (const q of queries) assert.deepEqual(full.search(q), sync.search(q), q);
+});
+
+test('afterPaint resolves without requestAnimationFrame and after a frame when available', async () => {
+  await afterPaint({});
+  let frames = 0;
+  await afterPaint({ requestAnimationFrame: (cb) => { frames++; setTimeout(cb, 0); } });
+  assert.equal(frames, 1);
 });
 
 test('topK returns the best scores first', () => {

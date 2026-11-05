@@ -6,7 +6,7 @@ import { createRequestsLocale, localizeRequestsManifest, requestsMessages } from
 import { preferredLocale, localeURL, navigationURL, stateURL, installLocale, loadOverlay, sourceHash, applyOverlay } from '../site/js/locale.js';
 import * as state from '../site/js/state.js';
 import * as filters from '../site/js/filter.js';
-import { KeywordIndex, normalize } from '../site/js/search.js';
+import { KeywordIndex, normalize, afterPaint } from '../site/js/search.js';
 
 const config = JSON.parse(readFileSync(new URL('../config/questions.json', import.meta.url)));
 const site = JSON.parse(readFileSync(new URL('../config/site.json', import.meta.url)));
@@ -130,7 +130,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     const calls = [];
     let modelLoads = 0;
     const context = {
-      ...state, ...filters, KeywordIndex, normalize, createRequestsLocale, localizeRequestsManifest,
+      ...state, ...filters, KeywordIndex, normalize, afterPaint, createRequestsLocale, localizeRequestsManifest,
       preferredLocale, localeURL, navigationURL, stateURL, loadOverlay,
       installLocale: (i18n, page) => installLocale(i18n, page, document, location),
       console, document, location, URLSearchParams, Intl, setTimeout, clearTimeout, CSS: { escape: (value) => value },
@@ -168,6 +168,10 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
     await context.ready;
     const { api } = context;
     const i18n = createRequestsLocale(locale);
+    assert.equal(api.app.index, null, 'first render does not wait for the keyword index');
+    assert.ok(get('#results').innerHTML.includes('English generated title') || get('#results').innerHTML.includes(translations[locale]?.title_en));
+    await api.app.indexReady;
+    assert.equal(api.app.index.full, true, 'paragraphs are indexed in the background');
     const fallback = stale && locale !== 'en';
     const expected = locale === 'en' || stale ? topic.title_en : translations[locale].title_en;
     assert.ok(get('#results').innerHTML.includes(expected));
