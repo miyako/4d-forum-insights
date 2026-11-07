@@ -145,6 +145,11 @@ URL parameters for answers are `a.<question>=<bands, levels or choices>`, for ex
 `make kb-pilot` runs a 300-topic pilot in a copy of the DB. `make kb` runs the full, resumable run on the working DB, one model server at a time.
 The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot results are in [docs/tips.md](docs/tips.md).
 
+An isolated **Questions pilot** explores unanswered and incompletely resolved threads: `make questions-pilot`
+samples 30 English-source threads in a private DB copy and produces an English-only local review page.
+It separates answer coverage from asker confirmation and does not publish `/questions/`.
+See [docs/questions.md](docs/questions.md).
+
 ## Delta updates
 
 `.github/workflows/delta.yml` runs every Monday at 03:17 UTC (12:17 JST) and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models or only the Tips/Voices steps, and a full re-list). It updates all three views: the main index, `/tips/` and `/voices/`. The steps are:
