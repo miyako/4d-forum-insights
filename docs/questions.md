@@ -386,6 +386,22 @@ Kev GGUF SHA256 is `7c2ebed90560522c2801389db482ac1dc4c36d828f201f6074c1d60e4339
 Hugging Face snapshot `f4624b6bb7072f1bab726a622c1cad3f96030b9e`, llama.cpp commit `620d2225c`
 build 11669, 16384-token context and one worker. No raw sources or generated ratings are committed.
 
+### Subsequent full-corpus approval (2026-11-07)
+
+The user subsequently chose **"Process the full corpus with documented limitations."** This authorizes
+all 17,042 selected-snapshot topics under the existing `questions-corpus-p1-68290b6c` /
+`questions-corpus-e3` checkpoint, reusing its 28 current decisions. The failed validation record remains
+`passed:false`; accepting the production scope does not relabel the four mismatches as successful checks
+or establish corpus-wide accuracy. The 13 incomplete-thread warnings and unreviewed probability status
+remain attached.
+
+The private `production-approval.json` and results DB state record that acceptance separately. The
+attached `build/questions-corpus/run-full-corpus.sh` pins and checks the actual local GGUF, starts one
+16384-token server slot, resumes every pending decision without a budget/topic filter, and cleans up
+only its own server on exit. Its logs are `full-run.log` and `full-server.log`; it does not invoke a writer,
+verifier, translator, embedding build, public export or DB push. Launch/progress is not full completion:
+declare completion only after persisted current/pending/failed counts verify the entire scope.
+
 ### Model specifications for the introduction
 
 | Role | Model | Precision / representation |
