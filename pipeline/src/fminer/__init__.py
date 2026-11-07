@@ -3,6 +3,11 @@ import sys
 
 
 def main() -> None:
+    # Corpus decisions use a separate ratings DB and must not open the shared working DB.
+    if len(sys.argv) > 1 and sys.argv[1] == "questions-corpus":
+        from .questions_corpus import cli
+        cli(sys.argv[2:])
+        return
     ap = argparse.ArgumentParser(prog="fminer", description="Mine feature requests from discuss.4d.com")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -113,6 +118,7 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--budget-minutes", type=float)
     sub.add_parser("questions-stats", help="Questions pilot: show progress, question differences and poster acceptance")
+    sub.add_parser("questions-corpus", help="Private all-language decision-only corpus: prepare, classify or stats")
 
     sub.add_parser("index", help="rebuild the full-text index")
     sub.add_parser("stats", help="show progress")
