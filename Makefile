@@ -18,9 +18,12 @@ PY            := uv run -q --project pipeline python
 PORT          ?= 8000
 KB_DB         ?= $(WORK_DB)
 KB_SAMPLE     ?= 300
+QUESTIONS_DB  ?= build/questions.db
+QUESTIONS_SAMPLE ?= 30
 
 .PHONY: all english-base snapshot data locales embeddings embeddings-sample vendor test serve site-data publish \
-        db-pull db-push db-seed delta-local kb kb-pilot kb-stats voices voices-stats clean
+        db-pull db-push db-seed delta-local kb kb-pilot kb-stats voices voices-stats \
+        questions-pilot questions-report clean
 
 all: snapshot data embeddings
 
@@ -109,6 +112,15 @@ voices:
 	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" ci/run-voices.sh
 voices-stats:
 	cd pipeline && FMINER_DB="$(abspath $(KB_DB))" uv run -q fminer voices-stats --top 30
+
+## isolated English-only Questions pilot; no publication or localization
+questions-pilot:
+	$(PY) scripts/questions_pilot.py snapshot --source "$(FMINER_DB_SRC)" --db "$(QUESTIONS_DB)"
+	cd pipeline && FMINER_DB="$(abspath $(QUESTIONS_DB))" SAMPLE="$(QUESTIONS_SAMPLE)" \
+	  LLAMA_SERVER="$${LLAMA_SERVER:-llama-server}" bash ci/run-questions.sh
+	$(MAKE) questions-report
+questions-report:
+	$(PY) scripts/questions_pilot.py report --db "$(QUESTIONS_DB)"
 
 ## run the delta (fetch + enrich + summary backfill + classify) locally against the working DB, e.g. on a Mac with Metal
 delta-local:

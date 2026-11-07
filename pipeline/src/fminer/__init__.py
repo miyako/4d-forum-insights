@@ -100,6 +100,20 @@ def main() -> None:
     p = sub.add_parser("voices-stats", help="voices: show progress")
     p.add_argument("--top", type=int, default=0, help="also list the N threads with the highest debate score")
 
+    p = sub.add_parser("questions-classify", help="Questions pilot: rate a fixed English-only sample")
+    p.add_argument("--base-url", default="http://127.0.0.1:18080")
+    p.add_argument("--model", default="")
+    p.add_argument("--sample", type=int, default=30)
+    p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--budget-minutes", type=float)
+    p = sub.add_parser("questions-write", help="Questions pilot: write grounded English entries for the sample")
+    p.add_argument("--base-url", default="http://127.0.0.1:18081/v1")
+    p.add_argument("--model", default="")
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--budget-minutes", type=float)
+    sub.add_parser("questions-stats", help="Questions pilot: show progress, question differences and poster acceptance")
+
     sub.add_parser("index", help="rebuild the full-text index")
     sub.add_parser("stats", help="show progress")
 
@@ -157,6 +171,16 @@ def main() -> None:
                             min_returning=a.min_returning)
         voices.stats(con, top=getattr(a, "top", 0))
         voices.write_stats(con)
+    elif a.cmd.startswith("questions-"):
+        from . import questions
+        con.close()
+        con = questions.connect()
+        if a.cmd == "questions-classify":
+            questions.classify(con, a.base_url, a.model, sample=a.sample, seed=a.seed, workers=a.workers,
+                               budget_minutes=a.budget_minutes)
+        elif a.cmd == "questions-write":
+            questions.write(con, a.base_url, a.model, workers=a.workers, budget_minutes=a.budget_minutes)
+        questions.stats(con)
     elif a.cmd == "index":
         db.rebuild_fts(con)
     elif a.cmd == "stats":
