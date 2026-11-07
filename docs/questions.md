@@ -257,3 +257,21 @@ Embedding inference uses Transformers.js 4.3.1 and revision
 variants are configured; no immutable GGUF weight revision is currently pinned. No generative model runs
 at semantic-search query time. Questions will reuse the existing multilingual search infrastructure when
 its UI is revisited.
+
+## Shared evidence correction after handoff
+
+The full-corpus audit found seven six-post threads where the allocator dropped a mandatory original-poster
+follow-up at each of the three decision budgets: 21 failing thread/budget combinations. The affected topics
+are 11280, 15663, 18039, 23580, 24751, 25481 and 35627. These are avoidable excerpt omissions, distinct from
+the 13 source threads whose downloaded replies are incomplete.
+
+The shared pilot/corpus allocator now selects all core posts and accounts exactly for headings, separators
+and omission markers before assigning per-post text allowances. A regression checks all six posts and the
+closing report that the problem persists at 2100, 3600, 6000 and 14000 characters. All 33 pilot regression
+tests pass.
+
+Evidence version `questions-e5` derives decision version `questions-p3-aa5a0d8d` and diagnostic writer
+version `questions-w4-93ad6755`. The p3 decision rubric and persisted pilot membership are unchanged, but
+old cached outputs are correctly stale. The earlier validation and reports remain historical evidence for
+their original versions, not proof of a fresh e5 model run. The all-language session is repeating the complete
+three-budget audit and its pre-recorded multilingual checks before bulk expansion; it does not run the writer.
