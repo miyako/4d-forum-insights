@@ -159,6 +159,23 @@ class QuestionsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             questions.bounded_excerpt(text, 10)
 
+    def test_six_post_threads_never_drop_a_core_poster_followup_to_fit_the_budget(self):
+        row = self.topic(texts=["Main question?"] + ["Context. " * 200] * 5)
+        source = row["thread_raw"]
+        for n in (3, 4, 5):
+            source = source.replace(
+                f"BobPrivate | 2026-01-01 12:00:00 UTC | #{n}",
+                f"AlicePrivate | 2026-01-01 12:00:00 UTC | #{n}")
+        source = source.replace("Context. " * 200, "Context. " * 200 + "The main problem still persists.")
+        self.con.execute("UPDATE topics SET thread_raw=? WHERE id=1", (source,))
+        row = self.con.execute("SELECT * FROM topics WHERE id=1").fetchone()
+        for budget in (2100, 3600, 6000, 14000):
+            with self.subTest(budget=budget):
+                text, cited = questions.evidence(row, budget)
+                self.assertEqual(cited, {1, 2, 3, 4, 5, 6})
+                self.assertLessEqual(len(text), budget)
+                self.assertIn("The main problem still persists.", text)
+
     def test_excerpts_include_early_answer_and_latest_asker_followup(self):
         texts = ["Question?", "Early answer."] + ["Another reply."] * 15
         row = self.topic(texts=texts)
