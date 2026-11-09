@@ -170,11 +170,11 @@ export function installLocale(i18n, page, document = globalThis.document, locati
   nav.innerHTML = LOCALES.map((locale) => `<a lang="${locale}" hreflang="${locale}" href="${localeURL(location.href, locale).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"${locale === i18n.locale ? ' aria-current="true"' : ''}>${{ en: 'EN', fr: 'FR', ja: '日本語' }[locale]}</a>`).join('');
   for (const link of document.querySelectorAll('a[href]')) {
     const href = link.dataset.localeHref || link.getAttribute('href');
-    if (link.closest('#locale-nav') || !/^(?:\.\.\/(?:tips\/|voices\/|requests\/)?|\.\/)$/.test(href)) continue;
+    if (link.closest('#locale-nav') || !/^(?:\.\.\/(?:tips\/|voices\/|requests\/|questions\/)?|\.\/)$/.test(href)) continue;
     link.dataset.localeHref = href;
     link.href = navigationURL(href, i18n.locale, location.href);
   }
-  document.title = i18n.t(page === 'requests' ? '4D Forum Requests' : page === 'tips' ? '4D Forum Tips' : '4D Forum Voices');
+  document.title = i18n.t(page === 'requests' ? '4D Forum Requests' : page === 'tips' ? '4D Forum Tips' : page === 'questions' ? '4D Forum Questions' : '4D Forum Voices');
   for (const option of document.querySelectorAll('#conf option')) {
     if (Number(option.value)) option.textContent = '≥ ' + i18n.pct(Number(option.value) / 100);
   }

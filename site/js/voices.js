@@ -3,6 +3,7 @@
 import { loadManifest, loadTopics, dataUrl } from './data.js';
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
+import { installQuestionsLink } from './questions-core.js';
 import { rrf } from './filter.js';
 import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure, semanticCredit } from './locale.js';
 import {
@@ -44,6 +45,7 @@ async function init() {
     return fail(esc(tr('Could not load data/manifest.json ({error}).', { error: e.message })));
   }
   const m = app.manifest;
+  installQuestionsLink(m);
   app.voices = m.voices;
   if (!app.voices?.entries) return fail(`${tr('No Forum Voices data yet: run')} <code>fminer voices-classify</code>, <code>fminer voices-write</code>, <code>make data</code>.`);
   document.title = tr(app.voices.title);

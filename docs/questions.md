@@ -1,7 +1,8 @@
 # Questions: English-only pilot
 
-This pilot explores a future `/questions/` page. It does **not** add a public route, change existing views,
-publish data, enable localization or alter the weekly delta. Outputs are private, ignored files under `build/`.
+The original pilot explores `/questions/` without publication or changes to the weekly delta. UI development
+and a separately approved, labelled small public preview now proceed while full-language processing
+continues; see the final sections. Original pilot/private outputs remain ignored files under `build/`.
 
 ## Scope and meaning
 
@@ -257,3 +258,115 @@ Embedding inference uses Transformers.js 4.3.1 and revision
 variants are configured; no immutable GGUF weight revision is currently pinned. No generative model runs
 at semantic-search query time. Questions will reuse the existing multilingual search infrastructure when
 its UI is revisited.
+
+## Private web UI preview (2026-11-09)
+
+UI development is now approved independently of the running classifier. A consistent, read-only snapshot
+supplied 31 fresh decisions across six source languages without pausing the model. This frozen sample is
+not representative and is not approved for publication. Do not commit its JSON or use it with `make publish`,
+DB upload, or Pages deployment.
+
+`site/questions/` reuses the site's responsive reading layout, theme preferences and EN/FR/JA interface
+navigation. It has keyword search, shareable filter state, coverage/impact/complexity/domain facets,
+independent Solved/Closed/reply filters, clarification filtering, probability details, evidence warnings
+and links back to Requests, Tips and Voices. Those three pages gain a **hidden-by-default** Questions link.
+Cross-page navigation keeps the query, compatible search mode and UI language.
+All four headers use a compact popup page menu with the current page identified, native tab navigation,
+arrow-key shortcuts, Escape and outside-click dismissal.
+
+Coverage circles fill clockwise from the top at 0%, 25%, 50%, 75% and 100% for the five ordered coverage
+degrees. These are ordinal symbols, not measured answered percentages or model probabilities. Importance
+and complexity use red, amber, blue and neutral grey labels for their high, middle, low and Unknown choices,
+respectively; text labels remain visible, so colour is never the only indication.
+
+**Needs clarification** means the model thinks essential answering details are missing, for example
+reproduction steps, environment, version, or a clearer intended outcome. The filter uses its independent
+probability at >= 0.5. It does not mean zero replies, imply an unsolved state, or exclude broad questions.
+An expandable explanation beside the controls makes this distinction available in EN/FR/JA.
+
+Text is reused, privacy-scrubbed English enrichment, explicitly labeled **thread summary**, not an extracted
+answer or remaining gap. New generated-field localization is not performed. Coverage comes only from
+`answers.coverage`; Solved is authoritative forum metadata but never promotes this model metric.
+Unknown reply counts and unknown Solved/Closed states remain unknown. Questions use the pilot's inclusive
+question-presence threshold of 0.5 and independent domain threshold of 0.6.
+
+Stage a private preview using a supplied snapshot and a copy of the existing public site data:
+
+```sh
+mkdir -p build/questions-preview-base
+gh release download data --repo miyako/4d-forum-insights \
+  --pattern site-data.tar.gz --dir build/questions-preview-base
+tar -xzf build/questions-preview-base/site-data.tar.gz -C build/questions-preview-base
+node scripts/questions_preview.mjs --snapshot /path/to/questions-ui-preview.json \
+  --data build/questions-preview-base/data
+python3 -m http.server 8003 --bind 127.0.0.1 -d build/questions-ui
+# http://127.0.0.1:8003/questions/?ui=en
+```
+
+The adapter accepts only `questions-ui-private-preview-v1` snapshots marked `private_preview:true` and
+`publish_allowed:false`. It validates canonical decision distributions and allowlists display metadata.
+It copies the public site/data into `build/questions-ui`, never overwrites `site/data`, and marks the staged
+manifest private. Requests' existing `manifest.questions` classification array is preserved.
+
+The **provisional frontend namespace** is `manifest.questions_view`, with `enabled`, `preview`, `semantic_enabled`, and
+`files.entries`. Its entries file uses `{version:1, entries:[...]}` with stable topic IDs, `title`, optional
+`body`, ISO `active` timestamp or null, `lang`, nullable `accepted`/`closed`/`replies`, canonical `answers`,
+optional `evidence_warnings`, `decision_model` and `decision_version`. `accepted` maps the snapshot's Solved
+metadata; it is not a generated poster-acceptance flag. Only the decision model's question gate controls
+eligibility; experimental writer fields are not read.
+
+Preview navigation requires all private markers and `questions_view.preview:true`; production navigation
+requires explicit `questions_view.enabled:true` and no private markers. Pages rejects private manifests
+outright and removes the Questions route unless production or a separately approved public preview is enabled. Full-data export, final contract agreement
+and publication remain the processing session's separate rollout work; finishing classification alone
+does not automatically deploy anything.
+
+Semantic/hybrid infrastructure is prepared but **dormant**: the private adapter explicitly sets
+`questions_view.semantic_enabled:false`. Separate authorization is required before setting it to true.
+Without that opt-in, even compatible public embeddings are not passed to the semantic loader, and semantic
+controls remain disabled. No embedding rebuild or new-field localization is performed.
+
+Once authorized, compatible public embeddings can be reused lazily by stable topic ID; Questions
+membership is applied **after** global ranking to avoid dropping a small sample before matching its IDs.
+Absent/incompatible embeddings disable semantic controls with a visible explanation. Loading or inference
+failure shows explicit keyword fallback status. This is infrastructure reuse, not new Questions-specific
+embeddings or a claim that semantic quality has been evaluated on the sample.
+
+```sh
+node --test tests/questions-ui.test.mjs tests/locale-ui.test.mjs tests/requests-ui.test.mjs
+```
+
+## Authorized small public preview (2026-11-09)
+
+The user separately approved publication of the UI with a **publication-safe small sample**, not the private
+31-row development snapshot or the full corpus. The processing owner constructed and privacy-reviewed a
+separate 15-question artifact: three threads each from EN/FR/DE/JA/ES. Text remains existing English thread
+summaries; assessments remain unreviewed, probabilistic and explicitly non-representative. Raw source,
+participant identities, private approval notes, runtime/DB provenance, and original private snapshots
+must not be uploaded.
+
+The independently validated `questions-preview.json` asset lives on the existing `data` release.
+Upload it only through the shared publication lease:
+
+```sh
+python3 scripts/publish_data.py with-lock -- \
+  gh release upload data build/questions-public/questions-preview.json \
+  --repo miyako/4d-forum-insights --clobber
+```
+
+`config/questions-preview.json` explicitly opts the Pages build into this asset. The installer
+`scripts/questions_public_preview.mjs` accepts only the separate `questions-ui-public-preview-v1` schema,
+`public_preview:true`, `private_preview:false`, `publish_allowed:true`, `representative:false`,
+valid decision distributions, and 1–60 rows. It allowlists public fields and refuses private manifests or
+replacing an enabled production Questions dataset with a sample.
+
+Pages installs the sample as `data/questions/preview.json` and sets `questions_view` to
+`{enabled:false, preview:true, public_preview:true, semantic_enabled:false, files:{entries:...}}`.
+The public banner distinguishes this frozen sample from the full dataset in EN/FR/JA. Questions becomes
+available in all four popup page menus. A missing optional asset leaves Questions disabled with a build
+warning; malformed or private data fails deployment. Disable the config flag to stop installing the preview.
+
+The existing `site-data.tar.gz`, English corpus, localization overlays and encrypted DB are not replaced.
+The build-time manifest retains Requests' `questions` array. Full processing is uninterrupted; no new
+embedding build, new generated-field localization, semantic query, or automatic full-corpus publication
+is authorized by this preview.

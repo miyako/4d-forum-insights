@@ -1,0 +1,33 @@
+.questions-page .tips-main { max-width: 1120px; }
+.question-facet { margin: 0 0 12px; padding: 0; border: 0; }
+.question-facet legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.question-facet .areas { max-width: none; padding: 0; margin: 0; }
+.questions-page .toolbar { align-items: start; }
+.question-card:target, .question-card.focused { outline: 2px solid var(--accent); }
+.question-ratings { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; font-size: 12px; }
+.question-ratings span { padding: 3px 8px; border-radius: 5px; background: var(--accent-soft); }
+.coverage-icon {
+  display: inline-block; width: 18px; height: 18px; flex: none; border-radius: 50%; border: 1px solid currentColor;
+  background: conic-gradient(currentColor 0 var(--coverage-fill), transparent var(--coverage-fill) 100%);
+}
+.question-ratings .rating-tone { display: inline-flex; align-items: center; gap: 6px; }
+.questions-page .rating-tone.tone-high { background: var(--lv4); color: var(--lv4t); }
+.questions-page .rating-tone.tone-medium { background: var(--lv2); color: var(--lv2t); }
+.questions-page .rating-tone.tone-low { background: var(--lv1); color: var(--lv1t); }
+.questions-page .rating-tone.tone-unknown { background: var(--lv0); color: var(--lv0t); }
+.questions-page .area.rating-tone.active { outline: 2px solid currentColor; outline-offset: 1px; }
+.clarification-help { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+.clarification-help summary { cursor: pointer; }
+.clarification-help p { max-width: 760px; }
+.question-card.coverage-full { border-left-color: var(--ok); }
+.question-card.coverage-none { border-left-color: var(--lv2t); }
+.question-distributions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.question-distributions dl { margin: 0; }
+.question-distributions dt { font-weight: normal; }
+.question-distributions dd { margin: 0 0 6px; color: var(--muted); }
+.question-links { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; margin: 10px 0 0; }
+.questions-page .tip-body { white-space: pre-line; }
+@media (max-width: 760px) {
+  .question-distributions { grid-template-columns: 1fr; }
+  .questions-page .toolbar-right { gap: 8px; }
+}

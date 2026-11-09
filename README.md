@@ -148,7 +148,10 @@ The full run takes about 18 hours on an M1 Pro. Details, timings and the pilot r
 An isolated **Questions pilot** explores unanswered and incompletely resolved threads: `make questions-pilot`
 samples 30 English-source threads in a private DB copy and produces an English-only local review page.
 It separates answer coverage from asker confirmation and does not publish `/questions/`.
-See [docs/questions.md](docs/questions.md).
+The web UI supports a separately approved **public preview** at `/questions/`, using a small privacy-reviewed
+sample while full processing continues. Popup navigation connects Requests, Tips, Voices and Questions.
+Full-dataset rollout and semantic search remain disabled. The original private development snapshot is
+never published. See [docs/questions.md](docs/questions.md) for staging and rollout boundaries.
 
 ## Delta updates
 
