@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>4D Forum Questions</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Questions from the 4D forum, with decision-model answer coverage and independent forum resolution metadata.">
+  <script src="../js/locale-boot.js"></script>
+  <script>
+    try {
+      const theme = localStorage.getItem('theme');
+      if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+    } catch {}
+  </script>
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="stylesheet" href="../css/tips.css">
+  <link rel="stylesheet" href="../css/questions.css">
+  <script type="module" src="../js/theme.js"></script>
+</head>
+<body class="tips-page questions-page">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-light" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></symbol>
+    <symbol id="i-dark" viewBox="0 0 24 24"><path fill="currentColor" d="M20.2 14.6A8.5 8.5 0 0 1 9.4 3.8a8.5 8.5 0 1 0 10.8 10.8z"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/></symbol>
+  </svg>
+  <header class="topbar">
+    <a class="brand" href="./" title="Reset"><span class="logo">4D</span><span class="brand-text">Forum Questions</span></a>
+    <form class="search" id="search-form" role="search" autocomplete="off">
+      <input id="q" type="search" placeholder="Ask or search…  ( / )" aria-label="Search questions">
+      <div class="modes" role="radiogroup" aria-label="Search mode">
+        <button type="button" data-mode="kw" role="radio">Keyword</button>
+        <button type="button" data-mode="hyb" role="radio">Hybrid</button>
+        <button type="button" data-mode="sem" role="radio">Semantic</button>
+      </div>
+    </form>
+    <details class="page-switcher">
+      <summary class="btn" aria-label="Switch forum page">Questions</summary>
+      <nav aria-label="Forum pages">
+        <a href="../requests/">Requests</a>
+        <a href="../tips/">Tips</a>
+        <a href="../voices/">Voices</a>
+        <span aria-current="page">Questions</span>
+      </nav>
+    </details>
+    <nav class="locale-nav" id="locale-nav" aria-label="Interface language"></nav>
+    <div class="theme-menu" id="theme-menu">
+      <button type="button" class="icon theme-btn" id="theme-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-list" aria-label="Color theme: Auto (follows system)">
+        <svg class="ico" aria-hidden="true"><use href="#i-auto"></use></svg>
+      </button>
+      <ul class="theme-list" id="theme-list" role="menu" aria-label="Color theme" hidden>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="auto" aria-checked="true">Auto <span class="muted">(system)</span></li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="light" aria-checked="false">Light</li>
+        <li role="menuitemradio" tabindex="-1" data-theme-value="dark" aria-checked="false">Dark</li>
+      </ul>
+    </div>
+  </header>
+  <main class="tips-main">
+    <p id="preview" class="status" hidden></p>
+    <p class="small muted" id="meaning">Answer coverage is a model assessment, not the forum's Solved state. Unanswered means zero replies. Closed does not mean solved.</p>
+    <p class="small muted">Coverage circles use 0%, 25%, 50%, 75%, 100% fill as symbols for the five levels, not measured answer percentages or model confidence.</p>
+    <p class="small muted" id="content-language">Thread summaries reuse existing English text; they are not newly extracted answers or remaining gaps.</p>
+    <p class="small muted" id="semantic-disclosure"></p>
+    <div id="facets"></div>
+    <div class="toolbar tips-toolbar">
+      <p class="count" id="count" aria-live="polite">Loading…</p>
+      <div class="toolbar-right">
+        <label>Solved <select id="solved"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+        <label>Closed <select id="closed"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+        <label>Replies <select id="replies"><option value="any">Any</option><option value="zero">Unanswered (zero replies)</option><option value="some">Has replies</option><option value="unknown">Unknown</option></select></label>
+        <label><input id="clarification" type="checkbox" aria-describedby="clarification-help"> Needs clarification</label>
+        <label>Sort <select id="sort"><option value="new">Newest</option><option value="relevance">Relevance</option><option value="impact">Importance (impact)</option></select></label>
+        <button class="btn" type="button" id="reset">Reset filters</button>
+      </div>
+      <details class="clarification-help">
+        <summary id="clarification-help">What does Needs clarification mean?</summary>
+        <p>The model thinks answering requires missing details, such as reproduction steps, the environment, the 4D version, or a clearer intended outcome. This is separate from answer coverage, reply count and Solved status; broad questions remain eligible.</p>
+      </details>
+    </div>
+    <div class="status" id="status" role="status" hidden></div>
+    <div id="results"></div>
+    <div class="more" id="more"></div>
+  </main>
+  <footer class="footer" id="footer"></footer>
+  <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
+  <script type="module" src="../js/page-switcher.js"></script>
+  <script type="module" src="../js/questions.js"></script>
+</body>
+</html>

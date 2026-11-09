@@ -6,7 +6,7 @@ name: Deploy Pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'config/**', 'localization/**', 'scripts/publish_data.py', '.github/workflows/pages.yml']
+    paths: ['site/**', 'config/**', 'localization/**', 'scripts/publish_data.py', 'scripts/questions_public_preview.mjs', '.github/workflows/pages.yml']
   workflow_dispatch:
   workflow_call:
 
@@ -48,6 +48,32 @@ jobs:
             --archive build/published/localization.tar.gz
       - name: Verify static Requests route
         run: test -f site/requests/index.html
+      - name: Install approved Questions public preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if jq -e '.enabled == true' config/questions-preview.json >/dev/null && test -f site/data/manifest.json; then
+            if gh release download data --repo "$GITHUB_REPOSITORY" --pattern questions-preview.json --dir build/published; then
+              node scripts/questions_public_preview.mjs --source build/published/questions-preview.json --data site/data
+            else
+              echo "::warning::No approved Questions preview asset; Questions stays disabled"
+            fi
+          fi
+      - name: Gate Questions rollout
+        run: |
+          set -euo pipefail
+          if test -f site/data/manifest.json && jq -e \
+            '.private_preview == true or .publish_allowed == false' site/data/manifest.json >/dev/null; then
+            echo "::error::Private preview data cannot be deployed"
+            exit 1
+          fi
+          if test -f site/data/manifest.json; then
+            node --input-type=module -e \
+              'import { gateQuestionsRoute } from "./scripts/questions_public_preview.mjs"; import { rmSync } from "node:fs"; if (!gateQuestionsRoute("site/data")) rmSync("site/questions/index.html", {force:true})'
+          else
+            rm -f site/questions/index.html
+          fi
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

@@ -41,8 +41,15 @@
         <button type="button" data-mode="sem" role="radio" title="Semantic search (meaning, not words)">Semantic</button>
       </div>
     </form>
-    <a class="btn switch" href="../tips/" title="Answered questions and tips, by area">Tips</a>
-    <a class="btn switch" href="../requests/" title="Feature requests, bugs and every forum topic">Requests</a>
+    <details class="page-switcher">
+      <summary class="btn" aria-label="Switch forum page">Voices</summary>
+      <nav aria-label="Forum pages">
+        <a href="../requests/" title="Feature requests, bugs and every forum topic">Requests</a>
+        <a href="../tips/" title="Answered questions and tips, by area">Tips</a>
+        <span aria-current="page">Voices</span>
+        <a id="questions-link" href="../questions/" hidden>Questions</a>
+      </nav>
+    </details>
     <nav class="locale-nav" id="locale-nav" aria-label="Interface language">
       <a href="?ui=en" lang="en">EN</a><a href="?ui=fr" lang="fr">FR</a><a href="?ui=ja" lang="ja">日本語</a>
     </nav>
@@ -80,6 +87,7 @@
   <footer class="footer" id="footer"></footer>
 
   <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
+  <script type="module" src="../js/page-switcher.js"></script>
   <script type="module" src="../js/voices.js"></script>
 </body>
 </html>
