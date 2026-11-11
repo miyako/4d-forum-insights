@@ -1,4 +1,4 @@
-# Questions: English-only pilot
+# Questions: private decisions and English pilot
 
 This pilot explores a future `/questions/` page. It does **not** add a public route, change existing views,
 publish data, enable localization or alter the weekly delta. Outputs are private, ignored files under `build/`.
@@ -241,6 +241,166 @@ or summarize every thread, run the experimental writer as a prerequisite, add a 
 blocker, redesign the UI, or publish results. Full-language processing must record input coverage, missing
 evidence, errors and resumable progress, and spot-check multilingual examples without claiming that the
 English pilot establishes corpus-wide accuracy.
+
+## Private all-language execution
+
+`questions-corpus` is separate from the immutable English pilot. Its explicit `--scope all` membership
+includes **every topic ID in the selected source snapshot**, including non-questions and every source
+language. `--topic-ids`, `--limit` and `--budget-minutes` bound execution without changing membership.
+It runs only Kev: no writer, acceptance verifier, enrichment generation, localization or embeddings.
+The approved p3 coverage, complexity and domain rubrics and all keys/values are retained. The shared evidence
+allocation was corrected and versioned as `questions-e5`: seven six-post threads previously lost a
+mandatory poster follow-up at each of the three decision budgets (21 affected shapes). All core posts
+are now retained using exact header/omission overhead and per-post allowances. This changes the
+derived p3 decision version and writer version, invalidating old evidence-dependent outputs without
+altering pilot membership or granting writer diagnostics authority. Historical p3-284111ab validation
+remains historical; the new bounded review uses the corrected evidence.
+Corpus evidence additionally has its own version,
+`questions-corpus-e3`, because its header discloses language, enrichment provenance and code limitations,
+anchors eligibility to the opening need, and reuses a bounded existing English summary as secondary
+multilingual context. Numbered original posts remain authoritative; the summary can omit details or
+misattribute speakers and cannot establish acceptance. No new summary is generated.
+
+The corpus-only prompt (`questions-corpus-p1-*`) adds two clarifications after bounded review:
+question detection belongs to the original opening need, not a later participant's incidental question
+in an announcement; recurring client/application termination is evidenced disruption, while a generic
+crash mention or unstated impact remains uncertain. It copies the repository rubric rather than
+changing the pilot prompt, retains every probability/choice key, and versions these clarifications.
+
+Pull the latest encrypted working DB into a **new private path**, using the already configured Keychain
+credential as documented in [delta setup](delta-setup.md). Do not print the passphrase, use shell tracing,
+push the DB or replace another session's input. The example below runs from the repository root:
+
+```sh
+set +x
+DB_KEY="$(security find-generic-password -s 4d-forum-insights-DB_KEY -w)" \
+  bash scripts/db-store.sh pull build/questions-corpus/source.db
+sqlite3 -readonly build/questions-corpus/source.db 'PRAGMA integrity_check;'
+curl -fsS https://miyako.github.io/4d-forum-insights/data/manifest.json \
+  -o build/questions-corpus/published-manifest.json
+curl -fsS https://miyako.github.io/4d-forum-insights/data/embeddings-ids.json \
+  -o build/questions-corpus/published-ids.json
+
+uv run -q --project pipeline python scripts/questions_corpus.py prepare \
+  --source build/questions-corpus/source.db --results build/questions-corpus/ratings.db --scope all \
+  --published-manifest build/questions-corpus/published-manifest.json \
+  --published-ids build/questions-corpus/published-ids.json
+```
+
+Preparation records snapshot hashes (including logical content so WAL edits are not missed), latest
+listing/fetch/activity timestamps, per-language topic/readiness counts, missing original evidence IDs,
+incomplete-post warnings and exact ID differences against the supplied published manifest. ID agreement
+does not establish the freshness of every post or completeness of the live forum after that snapshot.
+An older input or absent published comparison must not be described as the complete current corpus.
+The selected source is attached read-only. Never point results at the source or the release working DB.
+
+Fresh existing English opening enrichment is reused. If missing, failed or older than the source change,
+the original opening is used explicitly. Replies always remain original-language evidence. Requests/Tips
+summaries and their translations remain reusable downstream by topic ID; they are not evidence substitutes
+and are not regenerated. Fresh stored English thread summaries help interpret replies, but never replace
+them. Head-and-tail excerpts, opening/first/last reply and the poster's last three
+follow-ups retain the pilot priorities at 6000/3600/2100 characters. Code and image placeholders are a
+limitation, not a claim of full understanding. Missing reply counts remain unknown.
+
+Before expansion, use `--topic-ids` for a bounded multilingual check and record expectations before
+inference. Include question/non-question, zero-reply, substantive main-solution acceptance and impact
+examples. Judge decisions, not the experimental writer flags. Inspect language labels: an image-only
+opening classified as Italian is not evidence of Italian-prose accuracy.
+
+With an owned server already running, execute:
+
+```sh
+uv run -q --project pipeline python -u scripts/questions_corpus.py classify \
+  --source build/questions-corpus/source.db --results build/questions-corpus/ratings.db \
+  --base-url http://127.0.0.1:18080 --model-revision "$MODEL_REVISION" --budget-minutes 60
+uv run -q --project pipeline python scripts/questions_corpus.py stats \
+  --source build/questions-corpus/source.db --results build/questions-corpus/ratings.db
+```
+
+`MODEL_REVISION` must identify the **actual loaded weights** (prefer GGUF SHA256 and immutable Hugging Face
+snapshot revision), llama.cpp build and context/worker configuration, not just the mutable model tag.
+llama-server `/props` exposes the loaded local `model_path`; hash that file locally without uploading it.
+Results are fresh only when input fingerprint, actual decision-model ID, this revision, decision prompt
+and corpus evidence version all match. Changed source content requires preparation again. Historical
+attempts and previous decisions are retained but stale ratings are never counted as current.
+
+For a runner that starts and cleans up its own server, use absolute private paths because it changes
+directory to `pipeline/`:
+
+```sh
+QUESTIONS_SCOPE=all QUESTIONS_SOURCE="$PWD/build/questions-corpus/source.db" \
+  QUESTIONS_RESULTS="$PWD/build/questions-corpus/ratings.db" MODEL_REVISION="$MODEL_REVISION" \
+  CLASSIFY_BUDGET=60 LLAMA_SERVER=/path/to/llama-server bash pipeline/ci/run-questions.sh
+```
+
+The corpus runner supports one worker only, retaining the full 16384-token slot. It refuses existing
+listeners and kills only its owned server PID. Keep long jobs attached to the session; do not use `nohup`,
+`disown` or detached execution. Rerun the same command after a budget or interruption. A nonblocking
+results-file lock prevents concurrent CLI writers; stats can be read while a job runs.
+
+Ratings and metadata live in `questions_decisions`; append-only attempt history lives in
+`questions_attempts`. Neither table is a site export source or a Requests/Tips/Voices classification.
+Each attempt starts durably before inference, and each success/failure is committed immediately.
+Interrupted attempts are marked on the next exclusive run and retried. Failures retain exception type
+and HTTP status where available, not private response bodies or arbitrary model text. The command fails
+explicitly after recording failed attempts. Progress reports current/pending/blocked/failed per language,
+successful topics per minute and the last bounded run. Estimate remaining time from **measured successful
+throughput**, not scheduling counts. These are unreviewed probabilities, not corpus-wide accuracy claims.
+Only code, docs and tests are committed; source, ratings, logs, evidence and review artifacts stay ignored
+under `build/`. Public routes, datasets, translations and embeddings remain untouched.
+
+### Latest-source checkpoint (2026-11-07): expansion held
+
+The encrypted working asset updated on 2026-11-03 was pulled and passed SQLite integrity checks.
+It contains 17,042 topics: English 9,300, French 5,944, German 1,057, Japanese 600, Spanish 140 and
+Italian-label 1. Its IDs exactly match the published 2026-11-03 manifest/vector index, with no missing or
+extra IDs. Latest raw fetch is 2026-11-03 10:38 UTC. All openings are parseable and have fresh existing
+English enrichment; 13 threads have unavailable listed posts. Those warnings remain attached to ratings,
+and missing posts cannot supply resolution evidence. This is the complete **selected snapshot**, not a
+claim of live-forum completeness after November 3.
+
+The shared e5/corpus e3 audit checked all 51,126 topic/budget combinations with zero budget overflows or
+lost mandatory posts. The final bounded decision review used `questions-corpus-p1-68290b6c` and
+`questions-corpus-e3`: 24 of 28 threads pass every pre-recorded check, 50 of 54 individual checks pass.
+The failed earlier reviews and expectations remain preserved privately; failures were not relabeled.
+
+The remaining failures are a French link-only news post classified as a question, French self-resolution
+and Japanese workaround confirmation rated Mostly answered rather than expected Fully answered, and a
+Japanese graph answer similarly rated Mostly answered despite addressing the supplied main requirements.
+The graph thread also exposes an incorrect omission claim in its stored English summary, reinforcing
+why originals must control judgments. Spanish self-solutions and Japanese fixed-release confirmation
+improved with reused secondary English context; the negative secondary-explanation/tentative-inference
+controls and ordinary Unknown-impact control pass. The Italian-label thread has an image-only opening
+and mostly English discussion: processing it does not validate Italian-prose capability.
+
+**The broad bulk job has not been started.** The 28 current decisions are a bounded review, not full
+processing or a corpus-wide accuracy estimate. Meaningful semantic failures still need resolution before
+expansion; no writer or separate acceptance-verifier gate was introduced. The final run had zero request/
+response-validation failures and completed 28 topics in 642.37 seconds, **2.62 successful topics/minute**.
+At that measured rate, the remaining 17,014 would take about **108 hours** of inference, excluding
+interruptions and retries.
+
+Private durable state is `build/questions-corpus/source.db`, `ratings.db`, `source-coverage.json`,
+`evidence-audit.json`, `final-validation.json`, both expectation files and the run logs. The actual loaded
+Kev GGUF SHA256 is `7c2ebed90560522c2801389db482ac1dc4c36d828f201f6074c1d60e433948da`,
+Hugging Face snapshot `f4624b6bb7072f1bab726a622c1cad3f96030b9e`, llama.cpp commit `620d2225c`
+build 11669, 16384-token context and one worker. No raw sources or generated ratings are committed.
+
+### Subsequent full-corpus approval (2026-11-07)
+
+The user subsequently chose **"Process the full corpus with documented limitations."** This authorizes
+all 17,042 selected-snapshot topics under the existing `questions-corpus-p1-68290b6c` /
+`questions-corpus-e3` checkpoint, reusing its 28 current decisions. The failed validation record remains
+`passed:false`; accepting the production scope does not relabel the four mismatches as successful checks
+or establish corpus-wide accuracy. The 13 incomplete-thread warnings and unreviewed probability status
+remain attached.
+
+The private `production-approval.json` and results DB state record that acceptance separately. The
+attached `build/questions-corpus/run-full-corpus.sh` pins and checks the actual local GGUF, starts one
+16384-token server slot, resumes every pending decision without a budget/topic filter, and cleans up
+only its own server on exit. Its logs are `full-run.log` and `full-server.log`; it does not invoke a writer,
+verifier, translator, embedding build, public export or DB push. Launch/progress is not full completion:
+declare completion only after persisted current/pending/failed counts verify the entire scope.
 
 ### Model specifications for the introduction
 
