@@ -62,7 +62,12 @@ async function init() {
       }
       $('#preview').hidden = false;
       $('#preview').classList.add('warn');
-      $('#preview').textContent = tr('Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.', { count: num.format(data.entries.length) });
+      $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
+        ? tr('Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', {
+          count: num.format(data.entries.length), total: num.format(manifest.questions_view.corpus_total),
+          questions: num.format(app.items.length),
+        })
+        : tr('Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.', { count: num.format(data.entries.length) });
     }
     $('#semantic-disclosure').textContent = app.semantic.available ? modelDisclosure(manifest.embeddings, i18n) : tr('Semantic search is unavailable in this preview; keyword search is ready.');
     for (const button of document.querySelectorAll('[data-mode]')) {

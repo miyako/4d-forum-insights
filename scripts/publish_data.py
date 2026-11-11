@@ -417,11 +417,38 @@ def notify_localization(gh):
         return False
 
 
-def publish_localization(gh, release, store, directory, assets):
+def read_public_questions(path):
+    return json.loads(run("node", "scripts/questions_public_preview.mjs", "--validate", str(path)).stdout)
+
+
+def public_questions_overlays(documents, questions, require_complete=False):
+    hashes = questions_hashes(questions)
+    rows = {str(row["id"]): row for row in questions["entries"]}
+    for locale in ("fr", "ja"):
+        name = f"data/locales/{locale}/questions.json"
+        document = documents.get(name, {"entries": {}})
+        entries = {
+            key: {field: entry[field] for field in ("source_hash", "translation_version", "fields")}
+            for key, entry in document["entries"].items()
+            if hashes.get(key) == entry["source_hash"] and entry["translation_version"] == TRANSLATION_VERSION
+            and bool(entry["fields"]["body"].strip()) == bool((rows[key].get("body") or "").strip())
+        }
+        if require_complete and set(entries) != set(hashes):
+            raise ValueError(f"Incomplete {locale} Questions translations: {len(entries)}/{len(hashes)}")
+        # Cache/provenance metadata stays private; only portable display fields are public.
+        documents[name] = {"version": 1, "locale": locale, "page": "questions", "entries": entries}
+
+
+def publish_localization(gh, release, store, directory, assets, questions=None, require_questions=False):
     if "site-data.tar.gz" not in assets:
         raise ValueError("Publish English site data before localization")
     gh.release("download", release, "--pattern", "site-data.tar.gz", "--dir", str(directory))
     hashes = english_hashes(directory / "site-data.tar.gz")
+    if questions is None and "questions-preview.json" in assets:
+        gh.release("download", release, "--pattern", "questions-preview.json", "--dir", str(directory))
+        questions = read_public_questions(directory / "questions-preview.json")
+    if questions is not None:
+        hashes["questions"] = questions_hashes(questions)
     documents = {}
     if "localization.tar.gz" in assets:
         gh.release("download", release, "--pattern", "localization.tar.gz", "--dir", str(directory))
@@ -446,6 +473,9 @@ def publish_localization(gh, release, store, directory, assets):
             updated = True
     if not updated:
         raise ValueError("No localization overlays found")
+    if questions is not None:
+        public_questions_overlays(documents, questions, require_complete=require_questions
+                                  or questions.get("snapshot_scope") == "processed")
     output = directory / "localization.tar.gz"
     with tarfile.open(output, "w:gz") as tar:
         for name, document in sorted(documents.items()):
@@ -454,6 +484,44 @@ def publish_localization(gh, release, store, directory, assets):
             path.write_text(json.dumps(document, ensure_ascii=False) + "\n")
             tar.add(path, arcname=name)
     gh.release("upload", release, str(output), "--clobber")
+
+
+def publish_questions_preview(gh, release, source, store, directory, assets, expected_preview_hash=None):
+    questions = read_public_questions(source)
+    if "questions-preview.json" in assets:
+        current_directory = directory / "current-questions"
+        current_directory.mkdir()
+        gh.release("download", release, "--pattern", "questions-preview.json", "--dir", str(current_directory))
+        current_path = current_directory / "questions-preview.json"
+        current = read_public_questions(current_path)
+        if expected_preview_hash is not None and hashlib.sha256(current_path.read_bytes()).hexdigest() != expected_preview_hash:
+            raise ValueError("Published Questions preview changed; refresh and review before replacing it")
+        if current.get("processed_count", 0) > questions.get("processed_count", 0):
+            raise ValueError("Refusing to replace a more complete processed Questions preview")
+    elif expected_preview_hash not in (None, "absent"):
+        raise ValueError("Expected published Questions preview is missing")
+    # Upload complete locales first: the old preview remains usable until the source asset switches.
+    publish_localization(gh, release, store, directory, assets, questions=questions, require_questions=True)
+    output = directory / "questions-preview.json"
+    output.write_text(json.dumps(questions, ensure_ascii=False) + "\n")
+    gh.release("upload", release, str(output), "--clobber")
+
+
+def check_questions_localization(data):
+    manifest_path = data / "manifest.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text())
+    view = manifest.get("questions_view", {})
+    if view.get("snapshot_scope") != "processed" or view.get("public_preview") is not True:
+        return
+    questions = read_public_questions(data / questions_source_path(manifest))
+    documents = {}
+    for locale in ("fr", "ja"):
+        path = data / "locales" / locale / "questions.json"
+        if path.is_file():
+            documents[f"data/locales/{locale}/questions.json"] = validate_overlay(json.loads(path.read_text()))
+    public_questions_overlays(documents, questions, require_complete=True)
 
 
 def main():
@@ -476,6 +544,13 @@ def main():
         child.add_argument("--source", type=Path, default=Path("site/data"))
         child.add_argument("--release", default="data")
         child.add_argument("--provenance", type=Path, default=Path("build/site-data-provenance.json"))
+    child = sub.add_parser("publish-questions-preview")
+    child.add_argument("--source", type=Path, required=True)
+    child.add_argument("--store", type=Path, required=True)
+    child.add_argument("--expected-preview-sha256", required=True,
+                       help="reviewed base asset SHA256, or 'absent' for initial publication")
+    child.add_argument("--release", default="data")
+    child.add_argument("--deploy", action="store_true")
     child = sub.add_parser("with-lock")
     child.add_argument("args", nargs=argparse.REMAINDER)
     child = sub.add_parser("prepare-localization")
@@ -483,12 +558,17 @@ def main():
     child.add_argument("--seeds", type=Path, default=Path("localization"))
     child.add_argument("--store", type=Path, default=Path("build/localization"))
     child.add_argument("--archive", type=Path)
+    child = sub.add_parser("check-questions-localization")
+    child.add_argument("--data", type=Path, default=Path("site/data"))
     child = sub.add_parser("recover-lock")
     child.add_argument("--expected-sha", required=True)
     child.add_argument("--confirm-owner-stopped", action="store_true", required=True)
     args = parser.parse_args()
     if args.command == "prepare-localization":
         prepare_localization(args.data, args.seeds, args.store, args.archive)
+        return
+    if args.command == "check-questions-localization":
+        check_questions_localization(args.data)
         return
     if args.command == "seal-english-candidate":
         seal_english_candidate(args.source, args.release, args.provenance)
@@ -522,6 +602,10 @@ def main():
                 gh.release("upload", args.release, str(output), "--clobber")
                 if args.release == "data":
                     notify_localization(gh)
+            elif args.command == "publish-questions-preview":
+                assets = ensure_release(gh, args.release)
+                publish_questions_preview(gh, args.release, args.source, args.store, directory, assets,
+                                          args.expected_preview_sha256)
             else:
                 assets = ensure_release(gh, args.release)
                 publish_localization(gh, args.release, args.store or args.source / "locales",

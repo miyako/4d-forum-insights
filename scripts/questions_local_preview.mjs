@@ -32,7 +32,8 @@ export function stageLocalizedPreview({ source, data, store = 'localization', ar
   manifest.publish_allowed = false;
   manifest.questions_view = {
     enabled: false, preview: true, public_preview: false, semantic_enabled: false,
-    snapshot_scope: privateData && snapshot.snapshot_scope === 'processed' ? 'processed' : 'sample',
+    snapshot_scope: snapshot.snapshot_scope === 'processed' ? 'processed' : 'sample',
+    ...(Number.isSafeInteger(snapshot.corpus_total) ? { corpus_total: snapshot.corpus_total } : {}),
     files: { entries: privateData ? 'questions/entries.json' : manifest.questions_view.files.entries },
   };
   writeFileSync(marker, JSON.stringify(manifest));

@@ -446,3 +446,47 @@ inventory, not a completion claim. Bounded runs use the configured GPT-6.1 Sol r
 each successful batch atomically checkpoints the same durable store. Snapshot, cache-audit and per-run
 coverage reports stay under ignored `build/questions-expanded/`. Never replace a fuller store with the
 old 15-row backup; seed exact matches into the current store instead.
+
+## Conditional expanded publication and resume authorization
+
+The later November 11 user instruction authorizes publishing the expanded **8,082-of-17,042 processed
+preview only after both FR/JA overlays are complete**, followed by bulk resume only after the live
+deployment is verified. It does not declare the unfinished corpus complete. The processing owner separately
+regenerates and audits a publication-safe export; changing the private snapshot's flags is not approval.
+The source audit checks all rows with source-linked participant/privacy helpers and deterministic sensitive
+patterns, with targeted manual review of flagged candidates, not a manual reading of every sentence.
+Unrecognized identifying free text remains a review limitation; private audit details must never ship.
+
+Expanded approval uses the distinct `questions-ui-public-processed-preview-v1` schema, requiring
+`snapshot_scope: "processed"`, an exact `processed_count`, exact `eligible_question_count`,
+`corpus_total > processed_count`, and `corpus_complete: false`, alongside the existing public approval flags.
+The old small-sample schema still rejects more than 60 rows. The public banner displays the processed/total
+counts, eligible questions, incomplete/nonrepresentative scope and unreviewed model-assessment limitation.
+The first expanded audit redacts ten English fields (three titles and seven summaries), invalidating only
+those fields; unchanged text and all prior 15 records retain their caches.
+
+After complete translations, a zero-call unchanged rerun, translated-text privacy review and normal merged
+code integration, publish through the existing durable release lease:
+
+```sh
+python3 scripts/publish_data.py publish-questions-preview \
+  --source build/questions-expanded/questions-public-8082.json --store localization \
+  --expected-preview-sha256 <reviewed-current-questions-preview-sha256>
+gh workflow run pages.yml --ref main
+```
+
+The publisher refreshes English data, the existing Questions asset and existing localization inside the
+lease. It merges current overlays without replacing Requests/Tips/Voices, rejects missing/stale/empty
+translations, strips private field provenance from Questions overlays, uploads the complete localization
+archive first, then switches the Questions asset. It never uploads the raw DB, text cache, private audit or
+backup. A later standard localization publication also authenticates Questions hashes against the separate
+current approved asset, not the English archive alone.
+The expected preview hash is checked again inside the lease; a concurrently changed asset requires a new
+review rather than an automatic overwrite. A larger already published processed subset cannot be downgraded.
+
+Pages installs the approved Questions source **before** preparing locale overlays. Expanded public preview
+deployment fails closed if either locale is incomplete; the older small public sample and unrelated pages
+retain optional English fallback. The route remains a preview, with production rollout and semantic search
+disabled. Verify workflow success **and** live source/overlay IDs, canonical hashes, exact counts and zero
+stale fallback before reporting publication complete or notifying the processing owner that the conditional
+resume gate is satisfied. Workflow dispatch alone never releases the classifier.
