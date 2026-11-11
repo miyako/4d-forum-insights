@@ -27,7 +27,20 @@ async function init() {
     const manifest = await loadManifest();
     if (!(questionsEnabled(manifest) || questionsPreview(manifest) || questionsPublicPreview(manifest))) throw new Error(tr('Questions is not enabled in this dataset.'));
     const data = await getJSON(manifest.questions_view.files.entries);
-    app.items = await loadOverlay(buildQuestions(data), 'questions', i18n.locale, getJSON);
+    const questions = buildQuestions(data);
+    const localized = await loadOverlay(data.entries.map(({ id, title, body }) => ({ id, title, body: body ?? '' })),
+      'questions', i18n.locale, getJSON);
+    const byID = new Map(localized.map((item) => [item.id, item]));
+    app.items = questions.map((item) => ({ ...item, ...byID.get(item.id) }));
+    if (i18n.locale !== 'en') {
+      $('#translation-coverage').hidden = false;
+      $('#translation-coverage').textContent = tr('{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', {
+        current: num.format(localized.filter((item) => !item.translationFallback).length),
+        total: num.format(localized.length),
+        eligibleCurrent: num.format(app.items.filter((item) => !item.translationFallback).length),
+        eligible: num.format(app.items.length),
+      });
+    }
     app.semantic = new Semantic(questionsSemanticMeta(manifest));
     app.semantic.onProgress = (p) => {
       if (app.busy && p.file && p.total) status(tr('Loading semantic search…') + ' ' + pct((p.loaded || 0) / p.total));
@@ -38,7 +51,11 @@ async function init() {
     })));
     if (questionsPreview(manifest)) {
       $('#preview').hidden = false;
-      $('#preview').textContent = tr('Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.', { count: num.format(data.entries.length) });
+      $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
+        ? tr('Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.', {
+          count: num.format(data.entries.length), questions: num.format(app.items.length),
+        })
+        : tr('Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.', { count: num.format(data.entries.length) });
     } else if (questionsPublicPreview(manifest)) {
       if (data.public_preview !== true || data.publish_allowed !== true || data.private_preview !== false) {
         throw new Error('Public Questions preview requires publication-approved data');

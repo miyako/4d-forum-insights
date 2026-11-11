@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { installPublicPreview } from './questions_public_preview.mjs';
+import { adaptPreview } from './questions_preview.mjs';
 
 export function stageLocalizedPreview({ source, data, store = 'localization', archive, output = 'build/questions-translated-ui' }) {
   const target = resolve(output), base = resolve('build'), rel = relative(base, target);
@@ -17,14 +18,23 @@ export function stageLocalizedPreview({ source, data, store = 'localization', ar
   if (existsSync(target) && (!existsSync(marker) || JSON.parse(readFileSync(marker)).private_preview !== true)) {
     throw new Error('Refusing to overwrite an unrelated or nonprivate output');
   }
+  const snapshot = JSON.parse(readFileSync(source, 'utf8'));
+  const privateData = snapshot.private_preview === true ? adaptPreview(snapshot) : null;
   mkdirSync(target, { recursive: true });
   cpSync(resolve('site'), target, { recursive: true, filter: (file) => file !== resolve('site/data') });
   cpSync(resolve(data), resolve(target, 'data'), { recursive: true });
-  installPublicPreview(source, resolve(target, 'data'));
+  if (privateData) {
+    mkdirSync(resolve(target, 'data/questions'), { recursive: true });
+    writeFileSync(resolve(target, 'data/questions/entries.json'), JSON.stringify(privateData));
+  } else installPublicPreview(source, resolve(target, 'data'));
   const manifest = JSON.parse(readFileSync(marker));
   manifest.private_preview = true;
   manifest.publish_allowed = false;
-  manifest.questions_view = { ...manifest.questions_view, public_preview: false, semantic_enabled: false };
+  manifest.questions_view = {
+    enabled: false, preview: true, public_preview: false, semantic_enabled: false,
+    snapshot_scope: privateData && snapshot.snapshot_scope === 'processed' ? 'processed' : 'sample',
+    files: { entries: privateData ? 'questions/entries.json' : manifest.questions_view.files.entries },
+  };
   writeFileSync(marker, JSON.stringify(manifest));
   const result = spawnSync('python3', ['scripts/publish_data.py', 'prepare-localization',
     '--data', resolve(target, 'data'), '--seeds', resolve(store), '--store', resolve(target, 'data/locales'),

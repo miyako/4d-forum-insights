@@ -215,6 +215,34 @@ The second unchanged writable run made **zero model calls**. Offline mutation te
 and confirm only that string is requested once per target locale, retaining the original summaries,
 unrelated records, metadata and probability distributions.
 
+For an explicitly authorized larger private snapshot, first stage it separately and inventory exact reuse
+without starting inference:
+
+```sh
+node scripts/backfill-requests.mjs --page questions \
+  --data build/questions-expanded-ui/data --store localization --locale all \
+  --seed-only --reuse-store build/questions-localization-seeds/store \
+  --reuse-data build/questions-preview-base/data \
+  --reuse-provenance build/questions-localization-seeds/review-metadata.json
+```
+
+`--seed-only` writes validated cache matches and materialized overlays but cannot call a model. Its report
+includes existing/seeded string counts, exact `strings.{locale}.missing`, and current/missing topic coverage.
+It is mutually exclusive with read-only `--check-only`. Report the preflight inventory before running
+missing-string translation. A bounded writable checkpoint can then use:
+
+```sh
+node scripts/backfill-requests.mjs --page questions \
+  --data build/questions-expanded-ui/data --store localization --locale all \
+  --model gpt-6.1-sol --reasoning-effort low --workers 2 --batch-size 40 \
+  --entries 800 --minutes 10 --timeout 300 --retries 2
+```
+
+Omit seed arguments after the initial import, preserve each report separately, and restage matching overlays
+for UI review after checkpoints. Bounded runs may finish with pending coverage; only final completion checks
+should require `--require-complete`. Do not claim completion until all source strings and topic overlays are
+current in both locales and a second unchanged writable run reports zero requests and model calls.
+
 ## Hosted incremental setup
 
 The localization workflow is separate from the English delta: a localization/authentication/model failure

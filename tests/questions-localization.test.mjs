@@ -6,6 +6,7 @@ import { main as backfill, seedQuestionsCache, stringUnits } from '../scripts/ba
 import { sourceHash, readSourceRecords, readOverlay, writeOverlay, recordsFromColumns } from '../scripts/localization.mjs';
 import { translatedFields, applyOverlay, sourceHash as browserHash } from '../site/js/locale.js';
 import { stageLocalizedPreview } from '../scripts/questions_local_preview.mjs';
+import { COVERAGE, IMPACT, COMPLEXITY, DOMAINS } from '../site/js/questions-core.js';
 
 function fixture() {
   fs.mkdirSync('build', { recursive: true });
@@ -82,6 +83,68 @@ test('Questions first run persists provenance; unchanged rebuild has zero calls;
     const changedCache = JSON.parse(fs.readFileSync(path.join(f.store, 'text-cache/fr.json')));
     assert.deepEqual(changedCache.entries[sourceHash(f.rows[0].body)], originalBody, 'unchanged body retains original translation/provenance');
     assert.deepEqual(readOverlay(f.store, 'questions', 'fr').entries[2], overlay.entries[2], 'unrelated topic remains byte-equivalent');
+  } finally { f.cleanup(); }
+});
+
+test('seed-only audit persists reusable strings and reports exact missing counts without any model', async () => {
+  const f = fixture();
+  try {
+    const seed = path.join(f.root, 'seed');
+    fs.mkdirSync(path.join(seed, 'text-cache'), { recursive: true });
+    const text = f.rows[0].title, hash = sourceHash(text);
+    for (const locale of ['fr', 'ja']) fs.writeFileSync(path.join(seed, `text-cache/${locale}.json`), JSON.stringify({
+      version: 1, locale, translation_version: '1', protection_version: 2,
+      entries: { [hash]: { source_hash: hash, translation_version: '1', protection_version: 2, text: `Traduit ${text}` } },
+    }));
+    const report = await backfill(['--page', 'questions', '--data', f.data, '--store', f.store,
+      '--seed-only', '--reuse-store', seed], { translate: async () => { throw Error('Seed audit cannot call a model'); } });
+    assert.equal(report.model_calls, 0);
+    assert.equal(report.requested, 0);
+    assert.equal(report.complete, false);
+    for (const locale of ['fr', 'ja']) {
+      assert.deepEqual(report.strings[locale], { total: 4, current: 1, missing: 3 });
+      assert.equal(report.reused[locale].seeded, 1);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(f.store, `text-cache/${locale}.json`))).entries[hash].text, `Traduit ${text}`);
+    }
+  } finally { f.cleanup(); }
+});
+
+test('private processed staging retains more than 60 decisions including controls without expanding public approval', () => {
+  const f = fixture();
+  try {
+    const rating = labels => ({ choice: Object.keys(labels)[0],
+      probabilities: Object.fromEntries(Object.keys(labels).map((key, index) => [key, index === 0 ? 1 : 0])) });
+    const snapshot = { schema_version: 'questions-ui-private-preview-v1', snapshot_scope: 'processed',
+      private_preview: true, publish_allowed: false, items: Array.from({ length: 100 }, (_, i) => ({
+        id: i + 1, title: 'Query selections', summary: 'Find matching entities.', source_language: 'fr',
+        active: null, solved: null, closed: false, replies: null, raw_posts: 'PRIVATE SOURCE', user: 'PRIVATE IDENTITY',
+        answers: { has_question: { noul: i % 2 ? .4 : .8 }, coverage: rating(COVERAGE), impact: rating(IMPACT),
+          technicality: rating(COMPLEXITY), clarification: { noul: .1 },
+          ...Object.fromEntries(Object.keys(DOMAINS).map(key => ['domain_' + key, { noul: .5 }])) },
+      })) };
+    const source = path.join(f.root, 'snapshot.json');
+    fs.writeFileSync(source, JSON.stringify(snapshot));
+    const output = stageLocalizedPreview({ source, data: f.data, store: f.store, output: path.join(f.root, 'output') });
+    const manifest = JSON.parse(fs.readFileSync(path.join(output, 'data/manifest.json')));
+    const rows = JSON.parse(fs.readFileSync(path.join(output, 'data', manifest.questions_view.files.entries)));
+    assert.equal(rows.entries.length, 100, 'do not filter nonquestions from dataset');
+    assert.equal(rows.entries.filter(row => row.answers.has_question.noul >= .5).length, 50);
+    assert.equal(JSON.stringify(rows).includes('PRIVATE'), false);
+    assert.deepEqual(manifest.questions, [{ id: 'fr' }]);
+    assert.equal(manifest.private_preview, true);
+    assert.equal(manifest.publish_allowed, false);
+    assert.equal(manifest.questions_view.snapshot_scope, 'processed');
+    assert.equal(manifest.questions_view.public_preview, false);
+    assert.equal(manifest.questions_view.enabled, false);
+    assert.equal(manifest.questions_view.semantic_enabled, false);
+    stageLocalizedPreview({ source, data: f.data, store: f.store, output });
+    assert.deepEqual(JSON.parse(fs.readFileSync(source)), snapshot, 'rebuild must not modify frozen source');
+    const normalized = { ...snapshot, version: 1, items: undefined, entries: rows.entries };
+    fs.writeFileSync(source, JSON.stringify(normalized));
+    stageLocalizedPreview({ source, data: f.data, store: f.store, output });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'data/questions/entries.json'))), rows);
+    fs.writeFileSync(source, JSON.stringify({ ...normalized, items: snapshot.items }));
+    assert.throws(() => stageLocalizedPreview({ source, data: f.data, store: f.store, output }), /explicitly private/);
   } finally { f.cleanup(); }
 });
 

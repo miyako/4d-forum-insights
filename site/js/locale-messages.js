@@ -1,5 +1,7 @@
 // English message keys are canonical. Unknown manifest labels deliberately fall back to English.
 const rows = [
+  ['Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.', 'Instantané privé des résultats traités : {count} enregistrements, {questions} questions admissibles. Corpus incomplet ; classification en pause. Rien ici n’est publié.', '処理済みデータの非公開スナップショット：{count}件、対象の質問は{questions}件。全件の処理は未完了で、分類は停止中です。この内容は公開されません。'],
+  ['{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', '{current} enregistrements traduits sur {total} ; {eligibleCurrent} questions admissibles traduites sur {eligible}. Les traductions absentes ou périmées sont remplacées par le texte anglais, explicitement signalé.', '全{total}件中{current}件、対象の質問{eligible}件中{eligibleCurrent}件が翻訳済みです。翻訳が未完了または古い場合は、英語の代替表示であることを明記します。'],
   ['4D Forum Questions', 'Questions du forum 4D', '4Dフォーラムの質問'],
   ['Forum Questions', 'Questions du forum', 'フォーラムの質問'],
   ['Questions', 'Questions', '質問'],

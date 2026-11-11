@@ -209,7 +209,7 @@ test('private adapter and staging retain Requests schema and never write private
   } finally { rmSync(temp, { recursive: true }); }
 });
 
-for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public'])
+for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public', 'processed'])
   for (const translation of locale === 'en' ? ['missing'] : ['missing', 'current', 'stale'])
     test(`actual Questions module renders ${locale} ${publication} ${translation} with escaped summaries, filters, metadata, locale and state links`, async () => {
   const elements = new Map();
@@ -237,7 +237,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   const context = {
     ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure, loadOverlay,
     installLocale: (i18n, page) => installLocale(i18n, page, document, location),
-    loadManifest: async () => ({ private_preview: publication === 'private', publish_allowed: publication === 'public', questions_view: { preview: true, public_preview: publication === 'public', enabled: false, files: { entries: 'questions/entries.json' } } }),
+    loadManifest: async () => ({ private_preview: publication !== 'public', publish_allowed: publication === 'public', questions_view: { snapshot_scope: publication === 'processed' ? 'processed' : 'sample', preview: true, public_preview: publication === 'public', enabled: false, files: { entries: 'questions/entries.json' } } }),
     getJSON: async (file) => file.startsWith('locales/') ? {
       version: 1, page: 'questions', locale, entries: translation === 'missing' ? {} : {
         1: { source_hash: translation === 'stale' ? '0'.repeat(64) : sourceHash({ title: row().title, body: row().body }),
@@ -246,7 +246,9 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
             body: locale === 'fr' ? 'Résumé <traduit>.' : '要約 <翻訳>。',
           } },
       },
-    } : ({ ...data(row(1, { accepted: true, closed: true, replies: 0 })), public_preview: publication === 'public', private_preview: publication === 'private', publish_allowed: publication === 'public' }),
+    } : ({ ...data(row(1, { accepted: true, closed: true, replies: 0 }),
+      ...(publication === 'processed' ? [row(2, { replies: 0 }), row(3, { answers: { ...row().answers, has_question: { noul: .49 } } })] : [])),
+      public_preview: publication === 'public', private_preview: publication !== 'public', publish_allowed: publication === 'public' }),
     Semantic: class { available = false; },
     document, location, console, URLSearchParams, setTimeout,
     window: { history: { pushState: navigate, replaceState: navigate }, addEventListener: (name, callback) => events.set(name, callback) },
@@ -258,12 +260,20 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   assert.equal(context.api.app.ready, true);
   const banner = publication === 'public'
     ? 'Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.'
+    : publication === 'processed'
+    ? 'Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.'
     : 'Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.';
-  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: '1' }));
+  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: publication === 'processed' ? '3' : '1', questions: '2' }));
+  assert.equal(context.api.app.items.length, publication === 'processed' ? 2 : 1);
+  if (locale !== 'en') assert.equal(get('#translation-coverage').textContent,
+    createLocale(locale).t('{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', {
+      current: translation === 'current' ? '1' : '0', total: publication === 'processed' ? '3' : '1',
+      eligibleCurrent: translation === 'current' ? '1' : '0', eligible: publication === 'processed' ? '2' : '1',
+    }));
   const expectedBody = translation === 'current' ? locale === 'fr' ? 'Résumé &lt;traduit&gt;.' : '要約 &lt;翻訳&gt;。' : 'Thread &lt;summary&gt;.';
   assert.ok(get('#results').innerHTML.includes(expectedBody));
   assert.ok(get('#results').innerHTML.includes(`lang="${translation === 'current' ? locale : 'en'}"`));
-  if (locale !== 'en') assert.equal(get('#results').innerHTML.includes('translation-fallback'), translation !== 'current');
+  if (locale !== 'en') assert.equal(get('#results').innerHTML.includes('translation-fallback'), publication === 'processed' || translation !== 'current');
   assert.equal(context.api.app.items[0].lang, 'fr', 'source language is not changed by UI locale');
   assert.equal(context.api.app.items[0].solved, true);
   assert.equal(context.api.app.items[0].replies, 0);

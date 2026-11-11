@@ -6,14 +6,17 @@ import { buildQuestions } from '../site/js/questions-core.js';
 /** Only allowlisted metadata/text crosses from the private snapshot into the private UI. */
 export function adaptPreview(snapshot) {
   if (snapshot?.schema_version !== 'questions-ui-private-preview-v1'
-    || snapshot.private_preview !== true || snapshot.publish_allowed !== false || !Array.isArray(snapshot.items)) {
+    || snapshot.private_preview !== true || snapshot.publish_allowed !== false
+    || Array.isArray(snapshot.items) === Array.isArray(snapshot.entries)
+    || (snapshot.entries && snapshot.version !== 1)) {
     throw new Error('Expected an explicitly private Questions UI snapshot');
   }
   const data = {
     version: 1, private_preview: true, publish_allowed: false, generated_at: snapshot.generated_at,
-    entries: snapshot.items.map((row) => ({
-      id: row.id, title: row.title, body: row.summary, active: row.active,
-      lang: row.source_language, accepted: row.solved, closed: row.closed, replies: row.replies,
+    entries: (snapshot.items || snapshot.entries).map((row) => ({
+      id: row.id, title: row.title, body: snapshot.items ? row.summary : row.body, active: row.active,
+      lang: snapshot.items ? row.source_language : row.lang,
+      accepted: snapshot.items ? row.solved : row.accepted, closed: row.closed, replies: row.replies,
       answers: row.answers, evidence_warnings: row.evidence_warnings,
       decision_model: row.decision_model, decision_version: row.decision_version,
     })),

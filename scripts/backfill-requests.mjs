@@ -216,6 +216,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
     'reasoning-effort': { type: 'string', default: 'low' }, 'check-only': { type: 'boolean', default: false },
     'require-complete': { type: 'boolean', default: false },
     'upgrade-protection': { type: 'boolean', default: false },
+    'seed-only': { type: 'boolean', default: false },
   } });
   const locales = v.locale === 'all' ? LOCALES : [v.locale];
   if (!['requests', 'questions'].includes(v.page)) throw Error('Invalid exact-string page');
@@ -225,7 +226,8 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
     throw Error('Reuse provenance requires the recorded source model');
   }
   if (locales.some(locale => !LOCALES.includes(locale))) throw Error('Invalid locale');
-  if (!v['check-only'] && !v.model) throw Error('Explicit hosted model required');
+  if (!v['check-only'] && !v['seed-only'] && !v.model) throw Error('Explicit hosted model required');
+  if (v['check-only'] && v['seed-only']) throw Error('--seed-only and --check-only are mutually exclusive');
   if (v['check-only'] && v['upgrade-protection']) throw Error('Protection upgrade requires a writable run');
   const workers = positive(v.workers, 'workers', 8), size = positive(v['batch-size'], 'batch-size', 100);
   const deadline = Date.now() + positive(v.minutes, 'minutes', 300) * 60000;
@@ -238,7 +240,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   fs.mkdirSync(lock);
   atomicJSON(path.join(lock, 'owner.json'), { pid: process.pid, started: new Date().toISOString() });
   const report = { version: 1, translation_version: VERSION, protection_version: REQUESTS_PROTECTION_VERSION,
-    model: v.model, page: v.page, records: records.length, protection_upgrade: {},
+    model: v.model, page: v.page, seed_only: v['seed-only'], records: records.length, protection_upgrade: {},
     started: new Date().toISOString(), workers, batch_size: size, entry_budget: budget,
     reasoning_effort: v['reasoning-effort'], time_budget_minutes: Number(v.minutes),
     unique_strings: units.size, snapshot_hash: sourceHash(records.map(({ id, source_hash }) => ({ id, source_hash }))),
@@ -255,7 +257,8 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
       writeOverlay(v.store, state.overlay);
     }
     report.coverage[locale] = coverage(records, state.overlay);
-    report.strings[locale] = { total: units.size, current: [...units.keys()].filter(id => state.cache.entries[id]).length };
+    const current = [...units.keys()].filter(id => state.cache.entries[id]).length;
+    report.strings[locale] = { total: units.size, current, missing: units.size - current };
     report.complete = Object.keys(report.coverage).length === locales.length &&
       Object.values(report.coverage).every(c => c.current === c.total);
     atomicJSON(path.join(v.store, 'report.json'), report);
@@ -290,7 +293,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
     queue.sort((a, b) => a.offset - b.offset);
     let cursor = 0, saved = 0;
     const work = async () => {
-      while (!stopping && !v['check-only'] && cursor < queue.length && report.requested < budget && Date.now() < deadline) {
+      while (!stopping && !v['check-only'] && !v['seed-only'] && cursor < queue.length && report.requested < budget && Date.now() < deadline) {
         const { locale, rows: pending } = queue[cursor++];
         const rows = pending.slice(0, budget - report.requested), state = states.get(locale);
         report.requested += rows.length;

@@ -407,3 +407,42 @@ This copies the approved small sample and matching overlays into an isolated ign
 marks the staged manifest private/nonpublishable, and leaves semantic search disabled. Rebuilding is
 read-only with respect to the durable localization store; raw source and original ratings are not accessed.
 The Python static server runs no inference. Stop it when review is finished if local resource use is a concern.
+
+## Expanded private processed snapshot (2026-11-11)
+
+The subsequent explicit user selection expands only the **local** preview to all **8,082** freshness-checked
+decisions available at the safe pause. It does not expand the public 15-row allowlist. The source owner
+exported the snapshot in a consistent read-only transaction and checked every decision against current
+source/runtime fingerprints. All 8,082 records have valid synthesized display text and metadata; **7,681**
+meet `answers.has_question.noul >= 0.5`, and **401** non-question controls stay in the data but are not rendered
+as questions. Solved threads are retained (1,272 across the processed snapshot). This is still an incomplete,
+nonrepresentative portion of the 17,042-topic corpus; classification remains paused.
+
+The private adapter accepts either the original `items` snapshot or the normalized version-1 `entries`
+snapshot, never both. It requires `schema_version: "questions-ui-private-preview-v1"`,
+`private_preview: true` and `publish_allowed: false`; row fields are allowlisted again during staging.
+Only privacy-scrubbed existing English enrichment is passed to the browser or translation route. No raw
+opening/replies, participant identities, private freshness audit, DB files or runtime paths are copied.
+The source-language field remains distinct from the target display locale.
+
+```sh
+node scripts/questions_local_preview.mjs \
+  --source build/questions-expanded/questions-private-8082.json \
+  --data build/questions-preview-base/data --store localization \
+  --archive build/questions-localization-seeds/localization.tar.gz \
+  --output build/questions-expanded-ui
+```
+
+`snapshot_scope: "processed"` selects an accurate paused/incomplete banner rather than the old small-sample
+description. The UI shows translation coverage for **all records** and **eligible questions** separately.
+Pending or stale overlays retain explicitly labelled English fallback; neither an English fallback nor
+technical tokens identical in both languages constitute new translation work. Exact source-hash validation
+continues to reject stale entries. The original 15 records retain their exact canonical title/body hashes.
+
+Before any new translation calls, `--seed-only` recovered **10,878 FR** and **10,875 JA** distinct strings,
+including all 30 previously cached strings per locale. The remaining **5,260 FR / 5,263 JA** strings represent
+about 1.11 million source characters, or 264 nominal 40-string batches before retries. This is a preflight
+inventory, not a completion claim. Bounded runs use the configured GPT-6.1 Sol route with two workers;
+each successful batch atomically checkpoints the same durable store. Snapshot, cache-audit and per-run
+coverage reports stay under ignored `build/questions-expanded/`. Never replace a fuller store with the
+old 15-row backup; seed exact matches into the current store instead.
