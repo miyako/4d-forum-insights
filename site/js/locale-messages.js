@@ -1,5 +1,8 @@
 // English message keys are canonical. Unknown manifest labels deliberately fall back to English.
 const rows = [
+  ['Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', 'Aperçu public des résultats traités : {count} enregistrements sur {total}, {questions} questions admissibles. Corpus incomplet et non représentatif. Évaluations du modèle non vérifiées ; recherche sémantique désactivée.', '処理済みデータの公開プレビュー：全{total}件中{count}件、対象の質問は{questions}件。未完了で全体を代表するものではありません。モデルの判断は未レビューで、意味検索は無効です。'],
+  ['Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.', 'Instantané privé des résultats traités : {count} enregistrements, {questions} questions admissibles. Corpus incomplet ; classification en pause. Rien ici n’est publié.', '処理済みデータの非公開スナップショット：{count}件、対象の質問は{questions}件。全件の処理は未完了で、分類は停止中です。この内容は公開されません。'],
+  ['{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', '{current} enregistrements traduits sur {total} ; {eligibleCurrent} questions admissibles traduites sur {eligible}. Les traductions absentes ou périmées sont remplacées par le texte anglais, explicitement signalé.', '全{total}件中{current}件、対象の質問{eligible}件中{eligibleCurrent}件が翻訳済みです。翻訳が未完了または古い場合は、英語の代替表示であることを明記します。'],
   ['4D Forum Questions', 'Questions du forum 4D', '4Dフォーラムの質問'],
   ['Forum Questions', 'Questions du forum', 'フォーラムの質問'],
   ['Questions', 'Questions', '質問'],
@@ -57,6 +60,9 @@ const rows = [
   ['Loading semantic search; showing keyword results.', 'Chargement de la recherche sémantique ; résultats par mots-clés affichés.', '意味検索を読み込み中です。キーワード検索結果を表示しています。'],
   ['Semantic search failed: {error}. Showing keyword results.', 'Échec de la recherche sémantique : {error}. Résultats par mots-clés affichés.', '意味検索に失敗しました：{error}。キーワード検索結果を表示しています。'],
   ['Thread summary (English)', 'Résumé du sujet (anglais)', 'スレッドの要約（英語）'],
+  ['Thread summary (French)', 'Résumé du sujet (français)', 'スレッドの要約（フランス語）'],
+  ['Thread summary (Japanese)', 'Résumé du sujet (japonais)', 'スレッドの要約（日本語）'],
+  ['Thread summaries reuse existing English text, with French and Japanese translations when available. They are not newly extracted answers or remaining gaps.', 'Les résumés réutilisent le texte anglais existant, traduit en français et en japonais lorsque les traductions sont disponibles. Ce ne sont pas des réponses ou des lacunes nouvellement extraites.', 'スレッドの要約には既存の英語テキストを再利用し、利用可能な場合はフランス語と日本語の翻訳を表示します。新たに抽出した回答や未解決事項ではありません。'],
   ['No existing thread summary.', 'Aucun résumé existant.', '既存のスレッド要約はありません。'],
   ['Model probabilities and evidence limits', 'Probabilités du modèle et limites des éléments disponibles', 'モデルの確率と判断材料の制約'],
   ['Question present', 'Présence d’une question', '質問の存在'],

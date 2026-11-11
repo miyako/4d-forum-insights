@@ -8,16 +8,23 @@ const CHOICES = { coverage: COVERAGE, impact: IMPACT, technicality: COMPLEXITY }
 const BINARY = ['has_question', 'clarification', 'version_dependent', ...Object.keys(DOMAINS).map((k) => 'domain_' + k)];
 
 export function validatePublicPreview(data) {
-  if (data?.schema_version !== 'questions-ui-public-preview-v1' || data.version !== 1
+  const processed = data?.schema_version === 'questions-ui-public-processed-preview-v1';
+  if ((!processed && data?.schema_version !== 'questions-ui-public-preview-v1') || data.version !== 1
     || data.public_preview !== true || data.private_preview !== false || data.publish_allowed !== true
-    || data.representative !== false || !Array.isArray(data.entries) || data.entries.length < 1 || data.entries.length > 60
+    || data.representative !== false || !Array.isArray(data.entries) || data.entries.length < 1
+    || (!processed && data.entries.length > 60)
+    || (processed && (data.snapshot_scope !== 'processed' || data.corpus_complete !== false
+      || data.processed_count !== data.entries.length || !Number.isSafeInteger(data.corpus_total)
+      || data.corpus_total <= data.processed_count))
     || typeof data.generated_at !== 'string' || !Number.isFinite(Date.parse(data.generated_at))) {
-    throw new Error('Expected a separately publication-approved, small public Questions preview');
+    throw new Error('Expected a separately publication-approved Questions preview with explicit scope');
   }
   // Strip every root/row field not used by the public UI, including private approval/runtime provenance.
   const result = {
     schema_version: data.schema_version, version: 1, public_preview: true, private_preview: false,
     publish_allowed: true, representative: false, generated_at: data.generated_at,
+    ...(processed ? { snapshot_scope: 'processed', processed_count: data.processed_count,
+      corpus_total: data.corpus_total, corpus_complete: false } : {}),
     entries: data.entries.map((row) => {
       const entry = Object.fromEntries(ROW_FIELDS.filter((k) => Object.hasOwn(row, k)).map((k) => [k, row[k]]));
       const answers = row.answers || {};
@@ -33,7 +40,10 @@ export function validatePublicPreview(data) {
       return entry;
     }),
   };
-  if (!buildQuestions(result).length) throw new Error('Public preview contains no classified questions');
+  const questions = buildQuestions(result).length;
+  if (!questions) throw new Error('Public preview contains no classified questions');
+  if (processed && data.eligible_question_count !== questions) throw new Error('Incorrect eligible question count');
+  if (processed) result.eligible_question_count = questions;
   return result;
 }
 
@@ -48,6 +58,8 @@ export function installPublicPreview(source, directory) {
   writeFileSync(resolve(directory, 'questions/preview.json'), JSON.stringify(data));
   manifest.questions_view = {
     enabled: false, preview: true, public_preview: true, semantic_enabled: false,
+    ...(data.snapshot_scope === 'processed' ? { snapshot_scope: 'processed', processed_count: data.processed_count,
+      corpus_total: data.corpus_total, corpus_complete: false } : {}),
     files: { entries: 'questions/preview.json' },
   };
   writeFileSync(manifestFile, JSON.stringify(manifest));
@@ -61,9 +73,13 @@ export function gateQuestionsRoute(directory) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
-  if (args.length !== 4 || args[0] !== '--source' || args[2] !== '--data') {
-    throw new Error('Usage: node scripts/questions_public_preview.mjs --source FILE --data DIRECTORY');
+  if (args.length === 2 && args[0] === '--validate') {
+    console.log(JSON.stringify(validatePublicPreview(JSON.parse(readFileSync(args[1], 'utf8')))));
+  } else {
+    if (args.length !== 4 || args[0] !== '--source' || args[2] !== '--data') {
+      throw new Error('Usage: node scripts/questions_public_preview.mjs --source FILE --data DIRECTORY');
+    }
+    installPublicPreview(args[1], args[3]);
+    console.log('Publication-approved Questions preview installed; production rollout and semantic search remain disabled');
   }
-  installPublicPreview(args[1], args[3]);
-  console.log('Publication-approved Questions sample installed; production rollout and semantic search remain disabled');
 }

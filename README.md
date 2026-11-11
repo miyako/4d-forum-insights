@@ -152,6 +152,8 @@ The web UI supports a separately approved **public preview** at `/questions/`, u
 sample while full processing continues. Popup navigation connects Requests, Tips, Voices and Questions.
 Full-dataset rollout and semantic search remain disabled. The original private development snapshot is
 never published. See [docs/questions.md](docs/questions.md) for staging and rollout boundaries.
+The approved sample also supports a **local-only FR/JA translated rebuild**, reusing the durable
+hash-keyed localization cache for eventual finalization; it does not resume processing or change the public preview.
 
 ## Delta updates
 

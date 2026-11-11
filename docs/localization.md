@@ -7,7 +7,8 @@ to changed content. Original forum titles and English-only source summaries are 
 
 Only the already published generated fields are translated: Requests `title_en`/`line`/`para`
 (English title, summary line and paragraph), Tips `headline`/`body`, Voices
-`question`/`positions`/`outcome`. No raw forum posts, encrypted DB or `DB_KEY` are required. Translation never
+`question`/`positions`/`outcome`, and the separately approved local Questions preview `title`/`body`.
+No raw forum posts, encrypted DB or `DB_KEY` are required. Translation never
 re-rates a topic or re-summarizes a discussion. In particular, anonymous positions remain unattributed and keep
 their array order and cardinality.
 
@@ -158,6 +159,89 @@ The single response batch ID binds the locale, source hashes, field content and 
 asking the model to copy a random 64-character hash for every record; portable overlays still retain every
 source hash. A missing or mismatched response batch identity is rejected before any checkpoint is changed.
 Do not claim initial backfill completion from a sample or an export: inspect the persisted coverage report.
+
+## Reusable Questions translations (local review only)
+
+The Questions source is selected by `manifest.questions_view.files.entries`, not Requests' unrelated
+`manifest.questions` classification array. Read only the approved sample (15 threads for the November 11
+local rebuild); do not silently substitute the full corpus. A record's canonical display fields are exactly
+`{"title": row.title, "body": row.body ?? ""}`. Source-thread language does not select the target locale:
+every sample record has both FR and JA display translations, regardless of its original language.
+Only title and existing English thread-summary prose are translated, never ratings or raw evidence.
+
+The durable store uses `localization/{fr,ja}/questions.json`, with the same version-1 ID/source-hash
+identity as the other pages. Browser rendering, source readers, preparation and final-corpus archive
+hashing all use that exact field contract. A changed rating, reply count or source-language flag does not
+invalidate a translation. A changed English display field makes that topic overlay stale, not other topics.
+
+Use the existing exact-string runner with explicit `--page questions` to avoid retranslating an unchanged
+field when its sibling changes:
+
+```sh
+node scripts/backfill-requests.mjs --page questions \
+  --data build/questions-public/site/data --store localization --locale all \
+  --model gpt-6.1-sol --reasoning-effort low --workers 1 --batch-size 10 \
+  --entries 60 --minutes 15 --timeout 300 --require-complete \
+  --reuse-store build/questions-localization-seeds/store \
+  --reuse-data build/questions-preview-base/data \
+  --reuse-provenance build/questions-localization-seeds/review-metadata.json
+```
+
+The optional seed store combines an existing protection-v2 `text-cache/{fr,ja}.json` with current
+`{fr,ja}/{requests,tips}.json` overlays. The source data authenticates each page overlay's English hash;
+individual fields are reused only on exact string hash and protected-token validation. No fuzzy matching,
+canonical-text rewriting, translation of original posts, or inference from source language is allowed.
+Reusing old cache provenance records its known model and review-metadata hash and explicitly marks an
+unrecorded legacy prompt as such; it does not invent a prompt history.
+
+`localization/text-cache/{fr,ja}.json` checkpoints every successful exact-string batch atomically.
+New strings record `model`, `prompt_version`, `prompt_hash`, `translated_at`, translation version and
+protection version. Overlays retain per-field source hashes and provenance in `field_sources`. Both
+Questions overlays and the text cache must survive bulk resume/finalization: do not clean this ignored
+store or replace it with a new preview-only directory. The raw classifier neither reads nor rewrites it.
+The eventual exporter must keep canonical English `title`/`body` and stable IDs, then run
+`prepare-localization` against this store; newly eligible topics can be added without touching current ones.
+
+Rerun the same writable command **without** the optional seed arguments. An unchanged run must report
+`requested:0`, `translated:0`, `model_calls:0`, with full FR/JA coverage. `--check-only --require-complete`
+can independently verify coverage without submitting requests. `localize.mjs --page questions` also
+supports portable batch exchange, but the exact-string runner is preferred for narrow field invalidation.
+Default `--page all` still means Requests/Tips/Voices; this local work does not enable automatic Questions
+translation or change the hosted workflow/public deployment.
+
+The November 11 rebuild reused **52 strings** (26 per target locale: 15 summaries and 11 titles) and generated
+only **8 missing title strings** in two GPT-6.1 Sol calls. All 30 locale-topic records are current.
+The second unchanged writable run made **zero model calls**. Offline mutation tests change one title
+and confirm only that string is requested once per target locale, retaining the original summaries,
+unrelated records, metadata and probability distributions.
+
+For an explicitly authorized larger private snapshot, first stage it separately and inventory exact reuse
+without starting inference:
+
+```sh
+node scripts/backfill-requests.mjs --page questions \
+  --data build/questions-expanded-ui/data --store localization --locale all \
+  --seed-only --reuse-store build/questions-localization-seeds/store \
+  --reuse-data build/questions-preview-base/data \
+  --reuse-provenance build/questions-localization-seeds/review-metadata.json
+```
+
+`--seed-only` writes validated cache matches and materialized overlays but cannot call a model. Its report
+includes existing/seeded string counts, exact `strings.{locale}.missing`, and current/missing topic coverage.
+It is mutually exclusive with read-only `--check-only`. Report the preflight inventory before running
+missing-string translation. A bounded writable checkpoint can then use:
+
+```sh
+node scripts/backfill-requests.mjs --page questions \
+  --data build/questions-expanded-ui/data --store localization --locale all \
+  --model gpt-6.1-sol --reasoning-effort low --workers 2 --batch-size 40 \
+  --entries 800 --minutes 10 --timeout 300 --retries 2
+```
+
+Omit seed arguments after the initial import, preserve each report separately, and restage matching overlays
+for UI review after checkpoints. Bounded runs may finish with pending coverage; only final completion checks
+should require `--require-complete`. Do not claim completion until all source strings and topic overlays are
+current in both locales and a second unchanged writable run reports zero requests and model calls.
 
 ## Hosted incremental setup
 

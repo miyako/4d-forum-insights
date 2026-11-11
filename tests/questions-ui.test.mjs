@@ -5,8 +5,9 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import * as core from '../site/js/questions-core.js';
 import { adaptPreview, preparePreview } from '../scripts/questions_preview.mjs';
+import { sourceHash } from '../scripts/localization.mjs';
 import { validatePublicPreview, installPublicPreview, gateQuestionsRoute } from '../scripts/questions_public_preview.mjs';
-import { createLocale, preferredLocale, installLocale, localeURL, navigationURL, stateURL, modelDisclosure } from '../site/js/locale.js';
+import { createLocale, preferredLocale, installLocale, localeURL, navigationURL, stateURL, modelDisclosure, loadOverlay } from '../site/js/locale.js';
 import { KeywordIndex } from '../site/js/search.js';
 
 const rating = (labels, choice) => ({ choice, probabilities: Object.fromEntries(Object.keys(labels).map((k) => [k, k === choice ? 1 : 0])) });
@@ -152,7 +153,20 @@ test('public preview requires separate approval flags and strips fields not used
     { representative: true }, { schema_version: 'questions-ui-private-preview-v1' }, { entries: [] }]) {
     assert.throws(() => validatePublicPreview({ ...source, ...flags }), /publication-approved/);
   }
-  assert.throws(() => validatePublicPreview({ ...source, entries: Array.from({ length: 61 }, (_, i) => row(i + 1)) }), /small public/);
+  assert.throws(() => validatePublicPreview({ ...source, entries: Array.from({ length: 61 }, (_, i) => row(i + 1)) }), /publication-approved/);
+});
+
+test('expanded public approval uses a distinct incomplete-corpus schema and exact processed/question counts', () => {
+  const entries = Array.from({ length: 100 }, (_, i) => row(i + 1));
+  entries[0].answers.has_question.noul = .49;
+  const source = { ...publicData(), schema_version: 'questions-ui-public-processed-preview-v1', entries,
+    snapshot_scope: 'processed', processed_count: 100, corpus_total: 200, corpus_complete: false, eligible_question_count: 99 };
+  assert.equal(validatePublicPreview(source).entries.length, 100);
+  assert.equal(validatePublicPreview(source).eligible_question_count, 99);
+  for (const change of [{ corpus_complete: true }, { processed_count: 99 }, { corpus_total: 100 },
+    { eligible_question_count: 100 }, { schema_version: 'questions-ui-public-preview-v1' }, { snapshot_scope: 'sample' }]) {
+    assert.throws(() => validatePublicPreview({ ...source, ...change }));
+  }
 });
 
 test('public sample install preserves Requests and independent preview/full/semantic rollout gates', () => {
@@ -208,7 +222,10 @@ test('private adapter and staging retain Requests schema and never write private
   } finally { rmSync(temp, { recursive: true }); }
 });
 
-for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public']) test(`actual Questions module renders ${locale} ${publication} with escaped summaries, filters, metadata, locale and state links`, async () => {
+for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public', 'processed', 'public-processed'])
+  for (const translation of locale === 'en' ? ['missing'] : ['missing', 'current', 'stale'])
+    test(`actual Questions module renders ${locale} ${publication} ${translation} with escaped summaries, filters, metadata, locale and state links`, async () => {
+  const isPublic = publication.startsWith('public'), isProcessed = publication.endsWith('processed');
   const elements = new Map();
   const events = new Map();
   const element = () => ({
@@ -232,10 +249,20 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
     get href() { return 'https://example.test' + this.pathname + this.search; } };
   const navigate = (_state, _title, url) => { location.search = new URL(url, location.href).search; };
   const context = {
-    ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure,
+    ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure, loadOverlay,
     installLocale: (i18n, page) => installLocale(i18n, page, document, location),
-    loadManifest: async () => ({ private_preview: publication === 'private', publish_allowed: publication === 'public', questions_view: { preview: true, public_preview: publication === 'public', enabled: false, files: { entries: 'questions/entries.json' } } }),
-    getJSON: async () => ({ ...data(row(1, { accepted: true, closed: true, replies: 0 })), public_preview: publication === 'public', private_preview: publication === 'private', publish_allowed: publication === 'public' }),
+    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: 5, preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
+    getJSON: async (file) => file.startsWith('locales/') ? {
+      version: 1, page: 'questions', locale, entries: translation === 'missing' ? {} : {
+        1: { source_hash: translation === 'stale' ? '0'.repeat(64) : sourceHash({ title: row().title, body: row().body }),
+          translation_version: '1', fields: {
+            title: locale === 'fr' ? 'Question ORDA <traduite>' : 'ORDAの質問 <翻訳>',
+            body: locale === 'fr' ? 'Résumé <traduit>.' : '要約 <翻訳>。',
+          } },
+      },
+    } : ({ ...data(row(1, { accepted: true, closed: true, replies: 0 }),
+      ...(isProcessed ? [row(2, { replies: 0 }), row(3, { answers: { ...row().answers, has_question: { noul: .49 } } })] : [])),
+      public_preview: isPublic, private_preview: !isPublic, publish_allowed: isPublic }),
     Semantic: class { available = false; },
     document, location, console, URLSearchParams, setTimeout,
     window: { history: { pushState: navigate, replaceState: navigate }, addEventListener: (name, callback) => events.set(name, callback) },
@@ -245,12 +272,27 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   vm.runInNewContext(source + '\nglobalThis.ready = init(); globalThis.api = { app, update, controls, searchSemantic };', context);
   await context.ready;
   assert.equal(context.api.app.ready, true);
-  const banner = publication === 'public'
+  const banner = publication === 'public-processed'
+    ? 'Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.'
+    : publication === 'public'
     ? 'Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.'
+    : publication === 'processed'
+    ? 'Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.'
     : 'Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.';
-  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: '1' }));
-  assert.match(get('#results').innerHTML, /Thread &lt;summary&gt;\./);
-  assert.match(get('#results').innerHTML, /lang="en"/);
+  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: isProcessed ? '3' : '1', questions: '2', total: '5' }));
+  assert.equal(context.api.app.items.length, isProcessed ? 2 : 1);
+  if (locale !== 'en') assert.equal(get('#translation-coverage').textContent,
+    createLocale(locale).t('{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', {
+      current: translation === 'current' ? '1' : '0', total: isProcessed ? '3' : '1',
+      eligibleCurrent: translation === 'current' ? '1' : '0', eligible: isProcessed ? '2' : '1',
+    }));
+  const expectedBody = translation === 'current' ? locale === 'fr' ? 'Résumé &lt;traduit&gt;.' : '要約 &lt;翻訳&gt;。' : 'Thread &lt;summary&gt;.';
+  assert.ok(get('#results').innerHTML.includes(expectedBody));
+  assert.ok(get('#results').innerHTML.includes(`lang="${translation === 'current' ? locale : 'en'}"`));
+  if (locale !== 'en') assert.equal(get('#results').innerHTML.includes('translation-fallback'), isProcessed || translation !== 'current');
+  assert.equal(context.api.app.items[0].lang, 'fr', 'source language is not changed by UI locale');
+  assert.equal(context.api.app.items[0].solved, true);
+  assert.equal(context.api.app.items[0].replies, 0);
   assert.match(get('#results').innerHTML, /requests\/\?t=1&amp;ui=/);
   assert.match(get('#results').innerHTML, /coverage-partial/);
   assert.match(get('#results').innerHTML, /--coverage-fill:50%/);
@@ -262,7 +304,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   assert.ok(get('#results').innerHTML.includes(createLocale(locale).t('No questions match. Try removing a filter.')));
   context.api.app.state.t = 1; context.api.update();
   assert.ok(get('#results').innerHTML.includes(createLocale(locale).t('Linked question shown separately from current filters.')));
-  assert.match(get('#results').innerHTML, /Thread &lt;summary&gt;\./);
+  assert.ok(get('#results').innerHTML.includes(expectedBody));
   context.api.app.state.q = 'ORDA'; context.api.app.state.mode = 'sem';
   context.api.app.state.replies = 'any'; context.api.app.state.t = 0;
   context.api.update();

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  LOCALES, PAGES, VERSION, sourceHash, readSourceRecords, readOverlay, coverage, makeBatch, persistBatch,
+  LOCALES, PAGES, SUPPORTED_PAGES, VERSION, sourceHash, readSourceRecords, readOverlay, coverage, makeBatch, persistBatch,
 } from './localization.mjs';
 
 export function translationPrompt(batch) {
@@ -72,7 +72,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   } });
   const locales = values.locale === 'all' ? LOCALES : [values.locale];
   const pages = values.page === 'all' ? PAGES : [values.page];
-  if (locales.some(l => !LOCALES.includes(l)) || pages.some(p => !PAGES.includes(p))) throw Error('Invalid locale/page');
+  if (locales.some(l => !LOCALES.includes(l)) || pages.some(p => !SUPPORTED_PAGES.includes(p))) throw Error('Invalid locale/page');
   const size = positive(values['batch-size'], 'batch-size', 100);
   const budget = positive(values.entries, 'entries', 100000);
   const workers = positive(values.workers, 'workers', 8);

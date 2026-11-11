@@ -370,3 +370,131 @@ The existing `site-data.tar.gz`, English corpus, localization overlays and encry
 The build-time manifest retains Requests' `questions` array. Full processing is uninterrupted; no new
 embedding build, new generated-field localization, semantic query, or automatic full-corpus publication
 is authorized by this preview.
+
+## Local translated rebuild (2026-11-11)
+
+The user requested a safe bulk-processing pause and a **local-only** preview with actual French and
+Japanese record translations. The classifier stopped at 8,082 current decisions before translation began.
+This request does not authorize inference resume, release uploads or changing the published 15-row preview.
+
+All 15 approved sample records have FR and JA `title`/`body` translations (30 locale-topic records).
+The rebuild reuses 52 exact-string translations from the existing Requests cache; GPT-6.1 Sol translated
+only eight missing titles in two calls. An unchanged second writable localization run reported zero
+requested strings and zero model calls. Translations are independently checkpointed under
+`localization/{fr,ja}/questions.json` and `localization/text-cache/{fr,ja}.json`, not inside the frozen sample
+or classifier DB. See [localization.md](localization.md#reusable-questions-translations-local-review-only)
+for the stable final-exporter contract, provenance and narrow field-invalidation behavior.
+
+The UI loads `data/locales/{fr,ja}/questions.json` by stable topic ID and canonical `{title,body}` hash.
+Only display prose changes: source language, numeric model probabilities, nullable forum metadata,
+filters and IDs remain untouched. Keyword search indexes both translated and canonical text. The English
+view remains canonical; missing/stale translations are explicitly labelled English fallbacks, not counted
+as translated records. Technical-only titles may naturally be identical in all locales.
+
+After generating/reusing translations, stage the local site without replacing the existing private preview:
+
+```sh
+node scripts/questions_local_preview.mjs \
+  --source build/questions-public/questions-preview.json \
+  --data build/questions-preview-base/data --store localization \
+  --archive build/questions-localization-seeds/localization.tar.gz
+python3 -m http.server 8003 --bind 127.0.0.1 -d build/questions-translated-ui
+# http://127.0.0.1:8003/questions/?ui=fr
+# http://127.0.0.1:8003/questions/?ui=ja
+```
+
+This copies the approved small sample and matching overlays into an isolated ignored build directory,
+marks the staged manifest private/nonpublishable, and leaves semantic search disabled. Rebuilding is
+read-only with respect to the durable localization store; raw source and original ratings are not accessed.
+The Python static server runs no inference. Stop it when review is finished if local resource use is a concern.
+
+## Expanded private processed snapshot (2026-11-11)
+
+The subsequent explicit user selection expands only the **local** preview to all **8,082** freshness-checked
+decisions available at the safe pause. It does not expand the public 15-row allowlist. The source owner
+exported the snapshot in a consistent read-only transaction and checked every decision against current
+source/runtime fingerprints. All 8,082 records have valid synthesized display text and metadata; **7,681**
+meet `answers.has_question.noul >= 0.5`, and **401** non-question controls stay in the data but are not rendered
+as questions. Solved threads are retained (1,272 across the processed snapshot). This is still an incomplete,
+nonrepresentative portion of the 17,042-topic corpus; classification remains paused.
+
+The private adapter accepts either the original `items` snapshot or the normalized version-1 `entries`
+snapshot, never both. It requires `schema_version: "questions-ui-private-preview-v1"`,
+`private_preview: true` and `publish_allowed: false`; row fields are allowlisted again during staging.
+Only privacy-scrubbed existing English enrichment is passed to the browser or translation route. No raw
+opening/replies, participant identities, private freshness audit, DB files or runtime paths are copied.
+The source-language field remains distinct from the target display locale.
+
+```sh
+node scripts/questions_local_preview.mjs \
+  --source build/questions-expanded/questions-private-8082.json \
+  --data build/questions-preview-base/data --store localization \
+  --archive build/questions-localization-seeds/localization.tar.gz \
+  --output build/questions-expanded-ui
+```
+
+`snapshot_scope: "processed"` selects an accurate paused/incomplete banner rather than the old small-sample
+description. The UI shows translation coverage for **all records** and **eligible questions** separately.
+Pending or stale overlays retain explicitly labelled English fallback; neither an English fallback nor
+technical tokens identical in both languages constitute new translation work. Exact source-hash validation
+continues to reject stale entries. The original 15 records retain their exact canonical title/body hashes.
+
+Before any new translation calls, `--seed-only` recovered **10,878 FR** and **10,875 JA** distinct strings,
+including all 30 previously cached strings per locale. The remaining **5,260 FR / 5,263 JA** strings represent
+about 1.11 million source characters, or 264 nominal 40-string batches before retries. This is a preflight
+inventory, not a completion claim. Bounded runs use the configured GPT-6.1 Sol route with two workers;
+each successful batch atomically checkpoints the same durable store. Snapshot, cache-audit and per-run
+coverage reports stay under ignored `build/questions-expanded/`. Never replace a fuller store with the
+old 15-row backup; seed exact matches into the current store instead.
+
+## Conditional expanded publication and resume authorization
+
+The later November 11 user instruction authorizes publishing the expanded **8,082-of-17,042 processed
+preview only after both FR/JA overlays are complete**, followed by bulk resume only after the live
+deployment is verified. It does not declare the unfinished corpus complete. The processing owner separately
+regenerates and audits a publication-safe export; changing the private snapshot's flags is not approval.
+The source audit checks all rows with source-linked participant/privacy helpers and deterministic sensitive
+patterns, with targeted manual review of flagged candidates, not a manual reading of every sentence.
+Unrecognized identifying free text remains a review limitation; private audit details must never ship.
+
+Expanded approval uses the distinct `questions-ui-public-processed-preview-v1` schema, requiring
+`snapshot_scope: "processed"`, an exact `processed_count`, exact `eligible_question_count`,
+`corpus_total > processed_count`, and `corpus_complete: false`, alongside the existing public approval flags.
+The old small-sample schema still rejects more than 60 rows. The public banner displays the processed/total
+counts, eligible questions, incomplete/nonrepresentative scope and unreviewed model-assessment limitation.
+The first expanded audit redacts ten English fields (three titles and seven summaries), invalidating only
+those fields; unchanged text and all prior 15 records retain their caches.
+
+After complete translations, a zero-call unchanged rerun, translated-text privacy review and normal merged
+code integration, publish through the existing durable release lease:
+
+```sh
+python3 scripts/publish_data.py publish-questions-preview \
+  --source build/questions-expanded/questions-public-8082.json --store localization \
+  --expected-preview-sha256 <reviewed-current-questions-preview-sha256>
+gh workflow run pages.yml --ref main
+```
+
+The publisher refreshes English data, the existing Questions asset and existing localization inside the
+lease. It merges current overlays without replacing Requests/Tips/Voices, rejects missing/stale/empty
+translations, strips private field provenance from Questions overlays, uploads the complete localization
+archive first, then switches the Questions asset. It never uploads the raw DB, text cache, private audit or
+backup. A later standard localization publication also authenticates Questions hashes against the separate
+current approved asset, not the English archive alone.
+The expected preview hash is checked again inside the lease; a concurrently changed asset requires a new
+review rather than an automatic overwrite. A larger already published processed subset cannot be downgraded.
+
+Pages installs the approved Questions source **before** preparing locale overlays. Expanded public preview
+deployment fails closed if either locale is incomplete; the older small public sample and unrelated pages
+retain optional English fallback. The route remains a preview, with production rollout and semantic search
+disabled. Verify workflow success **and** live source/overlay IDs, canonical hashes, exact counts and zero
+stale fallback before reporting publication complete or notifying the processing owner that the conditional
+resume gate is satisfied. Workflow dispatch alone never releases the classifier.
+
+The expanded translation completed locally with **8,082 current records per locale** (7,681 eligible
+questions per locale), **21,739 reused locale-strings**, and **10,537 newly translated locale-strings** in
+267 configured-model calls including three retries. An unchanged writable rerun submitted **zero requests
+and zero model calls**, with no stale/missing overlays. These are translation-completion counts, not a
+claim that the 17,042-topic corpus is finished or that publication/privacy review has automatically passed.
+Browser overlay preparation strips private per-field provenance even for local review; the durable store
+and independent private backup retain it for finalization and merge-based recovery.

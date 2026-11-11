@@ -103,17 +103,19 @@ export const translatedFields = (page, item) => page === 'requests'
   ? { title_en: item.title_en ?? '', line: item.line ?? '', para: item.para ?? '' }
   : page === 'tips'
   ? { headline: item.headline, body: item.body }
+  : page === 'questions'
+  ? { title: item.title, body: item.body ?? '' }
   : { question: item.question, positions: item.positions, outcome: item.outcome };
 
 function validFields(page, fields, source) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return false;
   const keys = page === 'requests' ? ['title_en', 'line', 'para']
-    : page === 'tips' ? ['headline', 'body'] : ['question', 'positions', 'outcome'];
+    : page === 'tips' ? ['headline', 'body'] : page === 'questions' ? ['title', 'body'] : ['question', 'positions', 'outcome'];
   if (Object.keys(fields).sort().join() !== [...keys].sort().join()) return false;
   return keys.every((key) => key === 'positions'
     ? Array.isArray(fields[key]) && fields[key].length === source[key].length
       && fields[key].every((part) => typeof part === 'string' && part.trim())
-    : typeof fields[key] === 'string' && (page === 'requests'
+    : typeof fields[key] === 'string' && (page === 'requests' || page === 'questions'
       ? Boolean(fields[key].trim()) === Boolean(source[key].trim())
       : (!source[key] || fields[key].trim())));
 }
