@@ -215,6 +215,14 @@ clarification:{noul:.1},...Object.fromEntries(Object.keys(DOMAINS).map(key=>['do
         prepared = self.root / "prepared"
         publisher.prepare_localization(source, seeds, prepared)
         self.assertEqual(json.loads((prepared / "fr/questions.json").read_text()), document)
+        private_document = json.loads(json.dumps(document))
+        private_document["entries"]["42"]["field_sources"] = {"private_provenance": "/private/cache/path"}
+        (seeds / "fr/questions.json").write_text(json.dumps(private_document))
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(json.loads((prepared / "fr/questions.json").read_text()), document,
+                         "even local browser overlays exclude private field provenance")
+        self.assertEqual(json.loads((seeds / "fr/questions.json").read_text()), private_document,
+                         "durable provenance is retained in the source store")
         archive = self.root / "questions-source.tar.gz"
         publisher.pack_site(source, archive)
         self.assertEqual(publisher.english_hashes(archive)["questions"], hashes)

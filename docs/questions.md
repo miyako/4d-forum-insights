@@ -490,3 +490,11 @@ retain optional English fallback. The route remains a preview, with production r
 disabled. Verify workflow success **and** live source/overlay IDs, canonical hashes, exact counts and zero
 stale fallback before reporting publication complete or notifying the processing owner that the conditional
 resume gate is satisfied. Workflow dispatch alone never releases the classifier.
+
+The expanded translation completed locally with **8,082 current records per locale** (7,681 eligible
+questions per locale), **21,739 reused locale-strings**, and **10,537 newly translated locale-strings** in
+267 configured-model calls including three retries. An unchanged writable rerun submitted **zero requests
+and zero model calls**, with no stale/missing overlays. These are translation-completion counts, not a
+claim that the 17,042-topic corpus is finished or that publication/privacy review has automatically passed.
+Browser overlay preparation strips private per-field provenance even for local review; the durable store
+and independent private backup retain it for finalization and merge-based recovery.

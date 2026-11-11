@@ -236,6 +236,10 @@ def english_hashes(archive):
         return hashes
 
 
+def portable_questions_entry(entry):
+    return {field: entry[field] for field in ("source_hash", "translation_version", "fields")}
+
+
 def prepare_localization(data, seeds, store, archive=None):
     """Merge validated, current seeds/release entries without extracting archive paths."""
     hashes = {}
@@ -268,7 +272,8 @@ def prepare_localization(data, seeds, store, archive=None):
         for document in candidates:
             if document["locale"] != locale or document["page"] != page:
                 raise ValueError(f"Locale/page identity mismatch: {name}")
-            merged["entries"].update({key: entry for key, entry in document["entries"].items()
+            merged["entries"].update({key: portable_questions_entry(entry) if page == "questions" else entry
+                                      for key, entry in document["entries"].items()
                                       if hashes[page].get(key) == entry["source_hash"]
                                       and entry["translation_version"] == TRANSLATION_VERSION})
         output = store / relative
@@ -428,7 +433,7 @@ def public_questions_overlays(documents, questions, require_complete=False):
         name = f"data/locales/{locale}/questions.json"
         document = documents.get(name, {"entries": {}})
         entries = {
-            key: {field: entry[field] for field in ("source_hash", "translation_version", "fields")}
+            key: portable_questions_entry(entry)
             for key, entry in document["entries"].items()
             if hashes.get(key) == entry["source_hash"] and entry["translation_version"] == TRANSLATION_VERSION
             and bool(entry["fields"]["body"].strip()) == bool((rows[key].get("body") or "").strip())
