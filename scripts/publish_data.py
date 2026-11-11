@@ -22,6 +22,7 @@ PAGE_FIELDS = {
     "tips": ("headline", "body"),
     "voices": ("question", "positions", "outcome"),
     "requests": ("title_en", "line", "para"),
+    "questions": ("title", "body"),
 }
 LOCALE_PATHS = [f"data/locales/{locale}/{view}.json"
                 for locale in ("fr", "ja") for view in PAGE_FIELDS]
@@ -140,7 +141,8 @@ def validate_overlay(document):
         for field, value in fields.items():
             values = value if field == "positions" else [value]
             if (not isinstance(values, list) or not values
-                    or any(not isinstance(v, str) or (document["page"] != "requests" and not v.strip())
+                    or any(not isinstance(v, str) or (document["page"] != "requests"
+                           and not (document["page"] == "questions" and field == "body") and not v.strip())
                            for v in values)):
                 raise ValueError(f"Invalid translated field: {field}")
     return document
@@ -191,13 +193,46 @@ def request_source_paths(manifest):
     return paths
 
 
+def questions_source_path(manifest):
+    relative = manifest.get("questions_view", {}).get("files", {}).get("entries")
+    if relative is None:
+        return None
+    if not isinstance(relative, str):
+        raise ValueError("Invalid Questions entries path")
+    relative = re.split(r"[?#]", relative, maxsplit=1)[0]
+    path = Path(relative)
+    if not relative or path.is_absolute() or ".." in path.parts:
+        raise ValueError("Questions source path escapes data directory")
+    return path.as_posix()
+
+
+def questions_hashes(document):
+    if document.get("version") != 1 or not isinstance(document.get("entries"), list):
+        raise ValueError("Invalid Questions source dataset")
+    hashes = {}
+    for row in document["entries"]:
+        topic_id = row.get("id")
+        fields = {"title": row.get("title"), "body": "" if row.get("body") is None else row["body"]}
+        if (type(topic_id) is not int or not 1 <= topic_id <= 9007199254740991 or str(topic_id) in hashes
+                or not isinstance(fields["title"], str) or not fields["title"].strip()
+                or not isinstance(fields["body"], str)):
+            raise ValueError("Invalid Questions source fields or ID")
+        canonical = json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        hashes[str(topic_id)] = hashlib.sha256(canonical.encode()).hexdigest()
+    return hashes
+
+
 def english_hashes(archive):
     with tarfile.open(archive, "r:gz") as tar:
         hashes = {page: column_hashes(page, json.load(tar.extractfile(f"data/{page}/entries.json")))
                   for page in ("tips", "voices")}
-        paths = [f"data/{path}" for path in request_source_paths(json.load(tar.extractfile("data/manifest.json")))]
+        manifest = json.load(tar.extractfile("data/manifest.json"))
+        paths = [f"data/{path}" for path in request_source_paths(manifest)]
         hashes["requests"] = (request_hashes(*(json.load(tar.extractfile(path)) for path in paths))
                               if set(paths) <= set(tar.getnames()) else {})
+        questions_path = questions_source_path(manifest)
+        hashes["questions"] = (questions_hashes(json.load(tar.extractfile(f"data/{questions_path}")))
+                               if questions_path and f"data/{questions_path}" in tar.getnames() else {})
         return hashes
 
 
@@ -212,6 +247,9 @@ def prepare_localization(data, seeds, store, archive=None):
     topics, text = (data / path for path in paths)
     hashes["requests"] = (request_hashes(json.loads(topics.read_text()), json.loads(text.read_text()))
                           if topics.is_file() and text.is_file() else {})
+    questions_path = questions_source_path(json.loads(manifest.read_text())) if manifest.is_file() else None
+    hashes["questions"] = (questions_hashes(json.loads((data / questions_path).read_text()))
+                           if questions_path and (data / questions_path).is_file() else {})
     published = {}
     if archive and archive.is_file():
         try:

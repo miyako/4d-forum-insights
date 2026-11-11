@@ -68,6 +68,46 @@ class PublicationTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
+    def test_questions_overlays_reuse_canonical_title_body_in_prepare_and_final_archive(self):
+        source = self.source()
+        manifest_path = source / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["questions_view"] = {"files": {"entries": "questions/sample.json?t=1"}}
+        manifest["questions"] = [{"id": "fr"}]
+        manifest_path.write_text(json.dumps(manifest))
+        (source / "questions").mkdir()
+        rows = {"version": 1, "entries": [
+            {"id": 42, "title": "Original English", "body": "Existing summary", "lang": "fr"},
+            {"id": 43, "title": "Without summary", "body": None, "lang": "ja"},
+        ]}
+        (source / "questions/sample.json").write_text(json.dumps(rows))
+        hashes = publisher.questions_hashes(rows)
+        canonical = json.dumps({"title": "Original English", "body": "Existing summary"},
+                               sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        self.assertEqual(hashes["42"], hashlib.sha256(canonical.encode()).hexdigest())
+        seeds = self.root / "seeds"
+        (seeds / "fr").mkdir(parents=True)
+        document = {"version": 1, "locale": "fr", "page": "questions", "entries": {
+            "42": {"source_hash": hashes["42"], "translation_version": "1",
+                   "fields": {"title": "Titre traduit", "body": "Résumé traduit"}},
+            "43": {"source_hash": hashes["43"], "translation_version": "1",
+                   "fields": {"title": "Sans résumé", "body": ""}},
+        }}
+        (seeds / "fr/questions.json").write_text(json.dumps(document))
+        prepared = self.root / "prepared"
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(json.loads((prepared / "fr/questions.json").read_text()), document)
+        archive = self.root / "questions-source.tar.gz"
+        publisher.pack_site(source, archive)
+        self.assertEqual(publisher.english_hashes(archive)["questions"], hashes)
+        self.assertEqual(json.loads(manifest_path.read_text())["questions"], [{"id": "fr"}])
+        rows["entries"][0]["body"] = "Changed summary"
+        (source / "questions/sample.json").write_text(json.dumps(rows))
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(set(json.loads((prepared / "fr/questions.json").read_text())["entries"]), {"43"})
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            publisher.questions_source_path({"questions_view": {"files": {"entries": "../private.json"}}})
+
     def test_competing_publishers_cannot_enter_and_failure_releases(self):
         gh = FakeGitHub()
         with self.assertRaisesRegex(ValueError, "upload failed"):

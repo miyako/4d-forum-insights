@@ -6,8 +6,9 @@ export const VERSION = '1';
 export const REQUESTS_PROTECTION_VERSION = 2;
 export const LOCALES = ['fr', 'ja'];
 export const PAGES = ['voices', 'tips', 'requests'];
+export const SUPPORTED_PAGES = [...PAGES, 'questions'];
 export const FIELDS = { tips: ['headline', 'body'], voices: ['question', 'positions', 'outcome'],
-  requests: ['title_en', 'line', 'para'] };
+  requests: ['title_en', 'line', 'para'], questions: ['title', 'body'] };
 
 export function readSourceRecords(root, page) {
   const read = file => {
@@ -16,6 +17,17 @@ export function readSourceRecords(root, page) {
     if (!target.startsWith(`${base}${path.sep}`)) throw Error('Source path escapes data directory');
     return JSON.parse(fs.readFileSync(target, 'utf8'));
   };
+  if (page === 'questions') {
+    const manifest = read('manifest.json');
+    const file = manifest.questions_view?.files?.entries;
+    if (typeof file !== 'string') throw Error('Questions entries path is missing from manifest.questions_view');
+    const data = read(file);
+    if (data.version !== 1 || !Array.isArray(data.entries)) throw Error('Invalid Questions source dataset');
+    return recordsFromColumns(page, {
+      ids: data.entries.map(row => row.id), title: data.entries.map(row => row.title),
+      body: data.entries.map(row => row.body ?? ''),
+    });
+  }
   if (page !== 'requests') return recordsFromColumns(page, read(`${page}/entries.json`));
   const manifest = read('manifest.json');
   const { fields, rows } = read(manifest.files.topics);
@@ -43,7 +55,7 @@ export function sourceHash(fields) {
 }
 
 export function recordsFromColumns(page, data) {
-  if (!PAGES.includes(page) || !Array.isArray(data.ids)) throw Error('Invalid source page');
+  if (!SUPPORTED_PAGES.includes(page) || !Array.isArray(data.ids)) throw Error('Invalid source page');
   for (const key of FIELDS[page]) {
     if (!Array.isArray(data[key]) || data[key].length !== data.ids.length) throw Error(`Invalid source column ${key}`);
   }
@@ -68,8 +80,8 @@ export function validateShape(page, fields, source) {
         throw Error('Invalid positions');
       }
       if (source && value.length !== source[key].length) throw Error('Changed position count');
-    } else if (typeof value !== 'string' || (page !== 'requests' && !value.trim()) ||
-        (page === 'requests' && source && Boolean(value.trim()) !== Boolean(source[key].trim()))) {
+    } else if (typeof value !== 'string' || (page !== 'requests' && !(page === 'questions' && key === 'body') && !value.trim()) ||
+        (['requests', 'questions'].includes(page) && source && Boolean(value.trim()) !== Boolean(source[key].trim()))) {
       throw Error(`Invalid ${key}`);
     }
   }

@@ -370,3 +370,40 @@ The existing `site-data.tar.gz`, English corpus, localization overlays and encry
 The build-time manifest retains Requests' `questions` array. Full processing is uninterrupted; no new
 embedding build, new generated-field localization, semantic query, or automatic full-corpus publication
 is authorized by this preview.
+
+## Local translated rebuild (2026-11-11)
+
+The user requested a safe bulk-processing pause and a **local-only** preview with actual French and
+Japanese record translations. The classifier stopped at 8,082 current decisions before translation began.
+This request does not authorize inference resume, release uploads or changing the published 15-row preview.
+
+All 15 approved sample records have FR and JA `title`/`body` translations (30 locale-topic records).
+The rebuild reuses 52 exact-string translations from the existing Requests cache; GPT-6.1 Sol translated
+only eight missing titles in two calls. An unchanged second writable localization run reported zero
+requested strings and zero model calls. Translations are independently checkpointed under
+`localization/{fr,ja}/questions.json` and `localization/text-cache/{fr,ja}.json`, not inside the frozen sample
+or classifier DB. See [localization.md](localization.md#reusable-questions-translations-local-review-only)
+for the stable final-exporter contract, provenance and narrow field-invalidation behavior.
+
+The UI loads `data/locales/{fr,ja}/questions.json` by stable topic ID and canonical `{title,body}` hash.
+Only display prose changes: source language, numeric model probabilities, nullable forum metadata,
+filters and IDs remain untouched. Keyword search indexes both translated and canonical text. The English
+view remains canonical; missing/stale translations are explicitly labelled English fallbacks, not counted
+as translated records. Technical-only titles may naturally be identical in all locales.
+
+After generating/reusing translations, stage the local site without replacing the existing private preview:
+
+```sh
+node scripts/questions_local_preview.mjs \
+  --source build/questions-public/questions-preview.json \
+  --data build/questions-preview-base/data --store localization \
+  --archive build/questions-localization-seeds/localization.tar.gz
+python3 -m http.server 8003 --bind 127.0.0.1 -d build/questions-translated-ui
+# http://127.0.0.1:8003/questions/?ui=fr
+# http://127.0.0.1:8003/questions/?ui=ja
+```
+
+This copies the approved small sample and matching overlays into an isolated ignored build directory,
+marks the staged manifest private/nonpublishable, and leaves semantic search disabled. Rebuilding is
+read-only with respect to the durable localization store; raw source and original ratings are not accessed.
+The Python static server runs no inference. Stop it when review is finished if local resource use is a concern.

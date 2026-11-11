@@ -10,6 +10,7 @@ import {
 import { callCopilot } from './localize.mjs';
 
 const fields = text => ({ title_en: text, line: '', para: '' });
+export const UNIT_PROMPT_VERSION = 'forum-summary-units-v1';
 export function stringUnits(records) {
   const units = new Map();
   for (const record of records) for (const text of Object.values(record.fields)) {
@@ -126,7 +127,15 @@ export function materialize(records, cache, overlay) {
       }
     }
     if (Object.keys(translated).length === Object.keys(record.fields).length) {
-      candidate.entries[record.id] = { source_hash: record.source_hash, translation_version: VERSION, fields: translated };
+      candidate.entries[record.id] = {
+        source_hash: record.source_hash, translation_version: VERSION, fields: translated,
+        field_sources: Object.fromEntries(Object.entries(record.fields).map(([key, text]) => {
+          const entry = cache.entries[sourceHash(text)];
+          return [key, { source_hash: sourceHash(text), translation_version: VERSION,
+            ...(entry ? Object.fromEntries(['protection_version', 'model', 'prompt_version', 'prompt_hash', 'translated_at', 'reused_from', 'provenance_hash', 'legacy_prompt_unrecorded']
+              .filter(k => entry[k] !== undefined).map(k => [k, entry[k]])) : { empty: true }) }];
+        })),
+      };
     } else delete candidate.entries[record.id];
   }
   return candidate;
@@ -144,6 +153,50 @@ INPUT JSON:
 ${JSON.stringify({ batch_id: batch.batch_id, units: batch.units.map(({ id, text }) => ({ id, text })) })}`;
 }
 
+export function seedQuestionsCache(cache, units, { data, store, provenance } = {}) {
+  let reused = 0;
+  const add = (hash, entry, origin) => {
+    if (!units.has(hash) || cache.entries[hash]) return;
+    validateText(units.get(hash), entry.text);
+    cache.entries[hash] = {
+      ...entry, reused_from: entry.reused_from || origin,
+      ...(!entry.model && provenance ? { model: provenance.model, provenance_hash: sourceHash(provenance),
+        legacy_prompt_unrecorded: true } : {}),
+    };
+    reused++;
+  };
+  if (!store) return reused;
+  const file = path.join(store, 'text-cache', `${cache.locale}.json`);
+  if (fs.existsSync(file)) {
+    const seed = readTextCache(file, cache.locale, units);
+    for (const [hash, entry] of Object.entries(seed.entries)) add(hash, entry, 'requests/text-cache');
+  }
+  if (data) for (const page of ['requests', 'tips']) {
+    const overlayFile = path.join(store, cache.locale, `${page}.json`);
+    if (!fs.existsSync(overlayFile)) continue;
+    const overlay = readOverlay(store, page, cache.locale);
+    for (const record of readSourceRecords(data, page)) {
+      const entry = overlay.entries[record.id];
+      if (entry?.source_hash !== record.source_hash || entry.translation_version !== VERSION) continue;
+      for (const [key, text] of Object.entries(record.fields)) {
+        if (!text.trim()) continue;
+        const hash = sourceHash(text);
+        if (units.has(hash) && !cache.entries[hash]) {
+          // A legacy page translation that fails the stricter string mask is not reusable.
+          try { validateText(text, entry.fields[key]); }
+          catch (error) {
+            console.warn(`Not reusing ${cache.locale}/${page}/${record.id}/${key}: ${error.message}`);
+            continue;
+          }
+          add(hash, { source_hash: hash, translation_version: VERSION,
+            protection_version: REQUESTS_PROTECTION_VERSION, text: entry.fields[key] }, `${page}/${record.id}/${key}`);
+        }
+      }
+    }
+  }
+  return reused;
+}
+
 function positive(value, name, maximum) {
   const n = Number(value);
   if (!Number.isSafeInteger(n) || n < 1 || n > maximum) throw Error(`Invalid ${name}`);
@@ -153,6 +206,9 @@ function positive(value, name, maximum) {
 export async function main(args = process.argv.slice(2), { translate = callCopilot } = {}) {
   const { values: v } = parseArgs({ args, options: {
     data: { type: 'string', default: 'site/data' }, store: { type: 'string', default: 'build/localization-requests' },
+    page: { type: 'string', default: 'requests' },
+    'reuse-data': { type: 'string' }, 'reuse-store': { type: 'string' },
+    'reuse-provenance': { type: 'string' },
     locale: { type: 'string', default: 'all' }, model: { type: 'string', default: process.env.LOCALIZATION_MODEL },
     workers: { type: 'string', default: '8' }, 'batch-size': { type: 'string', default: '30' },
     minutes: { type: 'string', default: '300' }, entries: { type: 'string', default: '100000' },
@@ -162,6 +218,12 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
     'upgrade-protection': { type: 'boolean', default: false },
   } });
   const locales = v.locale === 'all' ? LOCALES : [v.locale];
+  if (!['requests', 'questions'].includes(v.page)) throw Error('Invalid exact-string page');
+  if (v['reuse-data'] && !v['reuse-store']) throw Error('--reuse-data requires --reuse-store');
+  const reuseProvenance = v['reuse-provenance'] ? JSON.parse(fs.readFileSync(v['reuse-provenance'], 'utf8')) : null;
+  if (reuseProvenance && (typeof reuseProvenance.model !== 'string' || !reuseProvenance.model.trim())) {
+    throw Error('Reuse provenance requires the recorded source model');
+  }
   if (locales.some(locale => !LOCALES.includes(locale))) throw Error('Invalid locale');
   if (!v['check-only'] && !v.model) throw Error('Explicit hosted model required');
   if (v['check-only'] && v['upgrade-protection']) throw Error('Protection upgrade requires a writable run');
@@ -170,17 +232,17 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   const budget = positive(v.entries, 'entries', 100000), timeout = positive(v.timeout, 'timeout', 600) * 1000;
   const retries = positive(v.retries, 'retries', 3);
   if (!['low', 'medium', 'high'].includes(v['reasoning-effort'])) throw Error('Invalid reasoning effort');
-  const records = readSourceRecords(v.data, 'requests'), units = stringUnits(records);
+  const records = readSourceRecords(v.data, v.page), units = stringUnits(records);
   fs.mkdirSync(v.store, { recursive: true });
   const lock = `${path.resolve(v.store)}.lock`;
   fs.mkdirSync(lock);
   atomicJSON(path.join(lock, 'owner.json'), { pid: process.pid, started: new Date().toISOString() });
   const report = { version: 1, translation_version: VERSION, protection_version: REQUESTS_PROTECTION_VERSION,
-    model: v.model, records: records.length, protection_upgrade: {},
+    model: v.model, page: v.page, records: records.length, protection_upgrade: {},
     started: new Date().toISOString(), workers, batch_size: size, entry_budget: budget,
     reasoning_effort: v['reasoning-effort'], time_budget_minutes: Number(v.minutes),
     unique_strings: units.size, snapshot_hash: sourceHash(records.map(({ id, source_hash }) => ({ id, source_hash }))),
-    requested: 0, translated: 0, coverage: {}, strings: {}, errors: [] };
+    requested: 0, translated: 0, model_calls: 0, reused: {}, coverage: {}, strings: {}, errors: [] };
   const states = new Map(), queue = [];
   let stopping = false;
   const stop = () => { stopping = true; };
@@ -212,7 +274,14 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
         }
         atomicJSON(file, cache);
       }
-      states.set(locale, { file, cache, overlay: readOverlay(v.store, 'requests', locale) });
+      report.reused[locale] = { existing: [...units.keys()].filter(id => cache.entries[id]).length, seeded: 0 };
+      if (!v['check-only'] && v.page === 'questions') {
+        report.reused[locale].seeded = seedQuestionsCache(cache, units, {
+          data: v['reuse-data'], store: v['reuse-store'], provenance: reuseProvenance,
+        });
+        atomicJSON(file, cache);
+      }
+      states.set(locale, { file, cache, overlay: readOverlay(v.store, v.page, locale) });
       const pending = [...units].filter(([id]) => !cache.entries[id]);
       for (let i = 0; i < pending.length; i += size) queue.push({ locale, offset: i, rows: pending.slice(i, i + size) });
       checkpoint(locale);
@@ -230,9 +299,14 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
           let lastError;
           for (let attempt = 0; attempt < retries && Date.now() < deadline; attempt++) {
             try {
+              report.model_calls++;
               const response = await translate(unitPrompt(batch), { model: v.model,
                 reasoningEffort: v['reasoning-effort'], timeout: Math.min(timeout, deadline - Date.now()) });
               const candidate = importUnitBatch(state.cache, units, batch, response);
+              for (const [hash] of rows) Object.assign(candidate.entries[hash], {
+                model: v.model, prompt_version: UNIT_PROMPT_VERSION, prompt_hash: sourceHash(unitPrompt(batch)),
+                translated_at: new Date().toISOString(),
+              });
               atomicJSON(state.file, candidate);
               state.cache = candidate;
               report.translated += rows.length;

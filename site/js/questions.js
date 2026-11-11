@@ -1,7 +1,7 @@
 import { loadManifest, getJSON } from './data.js';
 import { KeywordIndex } from './search.js';
 import { Semantic } from './semantic.js';
-import { createLocale, preferredLocale, installLocale, localeURL, stateURL, modelDisclosure } from './locale.js';
+import { createLocale, preferredLocale, installLocale, localeURL, stateURL, modelDisclosure, loadOverlay } from './locale.js';
 import {
   COVERAGE, IMPACT, COMPLEXITY, DOMAINS, STATE_KEYS, RATING_TONES, coverageIcon, buildQuestions, parseQuestionsState,
   serializeQuestionsState, filterQuestions, sortQuestions, rankQuestions, questionsEnabled, questionsPreview, questionsPublicPreview, questionsSemanticMeta,
@@ -27,13 +27,14 @@ async function init() {
     const manifest = await loadManifest();
     if (!(questionsEnabled(manifest) || questionsPreview(manifest) || questionsPublicPreview(manifest))) throw new Error(tr('Questions is not enabled in this dataset.'));
     const data = await getJSON(manifest.questions_view.files.entries);
-    app.items = buildQuestions(data);
+    app.items = await loadOverlay(buildQuestions(data), 'questions', i18n.locale, getJSON);
     app.semantic = new Semantic(questionsSemanticMeta(manifest));
     app.semantic.onProgress = (p) => {
       if (app.busy && p.file && p.total) status(tr('Loading semantic search…') + ' ' + pct((p.loaded || 0) / p.total));
     };
     app.index = await KeywordIndex.create(app.items.map((it) => ({
-      id: it.id, title: it.headline, title_en: it.title, line: it.body, tags: it.tags,
+      id: it.id, title: it.title, title_en: it.canonicalFields?.title || it.title,
+      line: [it.body, it.canonicalFields?.body].filter(Boolean).join(' '), tags: it.tags,
     })));
     if (questionsPreview(manifest)) {
       $('#preview').hidden = false;
@@ -139,15 +140,17 @@ function card(it) {
     + Object.entries(labels).map(([key, label]) => `<dt>${esc(tr(label))}</dt><dd>${pct(value.probabilities[key])}</dd>`).join('') + '</dl></div>';
   const link = (page, params = '') => esc(localeURL(`../${page}/${params}`, i18n.locale, location.href));
   const permalink = '?' + stateURL(location.search, serializeQuestionsState({ ...app.state, t: it.id }), STATE_KEYS, i18n.locale);
+  const contentLocale = it.contentLocale || 'en';
   return `<article id="question-${it.id}" class="tip-card question-card coverage-${it.coverage.choice}">
-    <h2 class="tip-title"><a href="https://discuss.4d.com/t/${it.id}" target="_blank" rel="noopener">${esc(it.headline)}</a></h2>
+    <h2 class="tip-title" lang="${contentLocale}"><a href="https://discuss.4d.com/t/${it.id}" target="_blank" rel="noopener">${esc(it.title)}</a></h2>
+    ${it.translationFallback ? `<p class="translation-fallback">${esc(tr('English fallback'))}</p>` : ''}
     <div class="question-ratings">
       ${[['Answer coverage', it.coverage, COVERAGE, 'coverage'], ['Importance (impact)', it.impact, IMPACT, 'impact'], ['Complexity', it.complexity, COMPLEXITY, 'complexity']].map(([name, value, labels, key]) => `<span class="rating-tone${RATING_TONES[key] ? ' tone-' + RATING_TONES[key][value.choice] : ''}">${key === 'coverage' ? coverageIcon(value.choice) : ''}${esc(tr(name))}: ${esc(tr(labels[value.choice]))} (${pct(value.probabilities[value.choice])})</span>`).join('')}
     </div>
     <p class="small muted">${esc(tr('Solved'))}: ${flag(it.solved)} · ${esc(tr('Closed'))}: ${flag(it.closed)} · ${it.replies === null ? esc(tr('Replies')) + ': ' + esc(tr('Unknown')) : it.replies === 0 ? esc(tr('Unanswered (zero replies)')) : num.format(it.replies) + ' ' + esc(tr('replies'))}
       ${it.lang ? ' · ' + esc(it.lang.toUpperCase()) : ''}${it.active === null ? '' : ' · ' + i18n.date(it.active / 864e5)}
       ${it.clarification >= .5 ? ' · ' + esc(tr('Needs clarification')) : ''}</p>
-    ${it.body ? `<p class="small muted">${esc(tr('Thread summary (English)'))}</p><p class="tip-body" lang="en">${esc(it.body)}</p>` : `<p class="small muted">${esc(tr('No existing thread summary.'))}</p>`}
+    ${it.body ? `<p class="small muted">${esc(tr(contentLocale === 'en' ? 'Thread summary (English)' : contentLocale === 'fr' ? 'Thread summary (French)' : 'Thread summary (Japanese)'))}</p><p class="tip-body" lang="${contentLocale}">${esc(it.body)}</p>` : `<p class="small muted">${esc(tr('No existing thread summary.'))}</p>`}
     <div class="tip-meta">${it.domains.map((key) => `<span class="chip">${esc(tr(DOMAINS[key]))}</span>`).join('')}</div>
     <details class="why"><summary>${esc(tr('Model probabilities and evidence limits'))}</summary>
       <div class="why-body">
@@ -160,8 +163,8 @@ function card(it) {
     </details>
     <p class="question-links"><a href="${esc(permalink)}">${esc(tr('Permalink'))}</a>
       <a href="${link('requests', '?t=' + it.id)}">${esc(tr('Open in Forum Requests'))}</a>
-      <a href="${link('tips', '?q=' + encodeURIComponent(it.headline))}">${esc(tr('Tips'))}</a>
-      <a href="${link('voices', '?q=' + encodeURIComponent(it.headline))}">${esc(tr('Voices'))}</a>
+      <a href="${link('tips', '?q=' + encodeURIComponent(it.title))}">${esc(tr('Tips'))}</a>
+      <a href="${link('voices', '?q=' + encodeURIComponent(it.title))}">${esc(tr('Voices'))}</a>
     </p>
   </article>`;
 }
