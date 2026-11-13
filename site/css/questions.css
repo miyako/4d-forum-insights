@@ -1,8 +1,6 @@
-.questions-page .tips-main { max-width: 1120px; }
 .question-facet { margin: 0 0 12px; padding: 0; border: 0; }
 .question-facet legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-.question-facet .areas { max-width: none; padding: 0; margin: 0; }
-.questions-page .toolbar { align-items: start; }
+.questions-page .toolbar .count { margin: 0; }
 .question-card:target, .question-card.focused { outline: 2px solid var(--accent); }
 .question-ratings { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; font-size: 12px; }
 .question-ratings span { padding: 3px 8px; border-radius: 5px; background: var(--accent-soft); }
@@ -16,7 +14,7 @@
 .questions-page .rating-tone.tone-low { background: var(--lv1); color: var(--lv1t); }
 .questions-page .rating-tone.tone-unknown { background: var(--lv0); color: var(--lv0t); }
 .questions-page .area.rating-tone.active { outline: 2px solid currentColor; outline-offset: 1px; }
-.clarification-help { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+.clarification-help { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 .clarification-help summary { cursor: pointer; }
 .clarification-help p { max-width: 760px; }
 .question-card.coverage-full { border-left-color: var(--ok); }
