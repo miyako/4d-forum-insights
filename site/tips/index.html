@@ -65,30 +65,48 @@
     </div>
   </header>
 
-  <nav class="areas" id="areas" aria-label="Areas"></nav>
+  <nav class="presets" id="presets" aria-label="Examples"></nav>
 
-  <main class="tips-main">
-    <div class="toolbar tips-toolbar">
-      <div class="count" id="count" aria-live="polite">Loading…</div>
-      <div class="toolbar-right">
-        <div class="types" id="types" role="group" aria-label="Type"></div>
-        <label title="Minimum model confidence for the type">Confidence <select id="conf">
-          <option value="0">Any</option><option value="50">≥ 50%</option><option value="70">≥ 70%</option></select></label>
-        <label>Since <select id="since"></select></label>
-        <label>Sort <select id="sort"></select></label>
+  <div class="layout">
+    <aside class="filters" id="filters" aria-label="Filters">
+      <div class="filters-head">
+        <strong>Filters</strong>
+        <button type="button" class="link" id="clear-filters">Clear all</button>
+        <button type="button" class="link only-mobile" id="close-filters">Done</button>
       </div>
-    </div>
-    <nav class="presets tips-presets" id="presets" aria-label="Examples"></nav>
-    <p class="small muted" id="semantic-disclosure" hidden></p>
-    <div class="status" id="status" hidden></div>
-    <div id="results"></div>
-    <div class="more" id="more"></div>
-  </main>
+      <section class="facet-box">
+        <div class="group-label">Type</div>
+        <div class="types" id="types" role="group" aria-label="Type"></div>
+        <label class="field" title="Minimum model confidence for the type">Confidence <select id="conf">
+          <option value="0">Any</option><option value="50">≥ 50%</option><option value="70">≥ 70%</option></select></label>
+        <label class="field">Since <select id="since"></select></label>
+      </section>
+      <section class="facet-box">
+        <div class="group-label">Areas</div>
+        <nav class="areas" id="areas" aria-label="Areas"></nav>
+      </section>
+    </aside>
+
+    <main class="results tips-main" id="results-pane">
+      <div class="toolbar tips-toolbar">
+        <button type="button" class="only-mobile btn" id="open-filters">Filters</button>
+        <div class="count" id="count" aria-live="polite">Loading…</div>
+        <div class="toolbar-right">
+          <label>Sort <select id="sort"></select></label>
+        </div>
+      </div>
+      <p class="small muted" id="semantic-disclosure" hidden></p>
+      <div class="status" id="status" hidden></div>
+      <div id="results"></div>
+      <div class="more" id="more"></div>
+    </main>
+  </div>
 
   <footer class="footer" id="footer"></footer>
 
   <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
   <script type="module" src="../js/page-switcher.js"></script>
+  <script type="module" src="../js/filters-panel.js"></script>
   <script type="module" src="../js/tips.js"></script>
 </body>
 </html>
