@@ -220,6 +220,12 @@ function renderStatic() {
   $('#conf').addEventListener('change', (e) => { app.state.conf = Number(e.target.value); update(); });
   $('#since').addEventListener('change', (e) => { app.state.since = Number(e.target.value); update(); });
   $('#sort').addEventListener('change', (e) => { app.state.sort = e.target.value; update(); });
+  $('#clear-filters').addEventListener('click', () => {
+    const { q, mode, sort } = app.state;
+    app.state = { ...parseTipsState(''), q, mode, sort };
+    syncControls();
+    update();
+  });
   $('#presets').addEventListener('click', (e) => {
     const a = e.target.closest('[data-params]');
     if (!a) return;

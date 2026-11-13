@@ -55,36 +55,49 @@
       </ul>
     </div>
   </header>
-  <main class="tips-main">
-    <p id="preview" class="status" hidden></p>
-    <p class="small muted" id="meaning">Answer coverage is a model assessment, not the forum's Solved state. Unanswered means zero replies. Closed does not mean solved.</p>
-    <p class="small muted">Coverage circles use 0%, 25%, 50%, 75%, 100% fill as symbols for the five levels, not measured answer percentages or model confidence.</p>
-    <p class="small muted" id="content-language">Thread summaries reuse existing English text, with French and Japanese translations when available. They are not newly extracted answers or remaining gaps.</p>
-    <p class="small muted" id="translation-coverage" aria-live="polite" hidden></p>
-    <p class="small muted" id="semantic-disclosure"></p>
-    <div id="facets"></div>
-    <div class="toolbar tips-toolbar">
-      <p class="count" id="count" aria-live="polite">Loading…</p>
-      <div class="toolbar-right">
-        <label>Solved <select id="solved"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
-        <label>Closed <select id="closed"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
-        <label>Replies <select id="replies"><option value="any">Any</option><option value="zero">Unanswered (zero replies)</option><option value="some">Has replies</option><option value="unknown">Unknown</option></select></label>
-        <label><input id="clarification" type="checkbox" aria-describedby="clarification-help"> Needs clarification</label>
-        <label>Sort <select id="sort"><option value="new">Newest</option><option value="relevance">Relevance</option><option value="impact">Importance (impact)</option></select></label>
-        <button class="btn" type="button" id="reset">Reset filters</button>
+  <div class="layout">
+    <aside class="filters" id="filters" aria-label="Filters">
+      <div class="filters-head">
+        <strong>Filters</strong>
+        <button class="link" type="button" id="reset">Reset filters</button>
+        <button type="button" class="link only-mobile" id="close-filters">Done</button>
       </div>
-      <details class="clarification-help">
-        <summary id="clarification-help">What does Needs clarification mean?</summary>
-        <p>The model thinks answering requires missing details, such as reproduction steps, the environment, the 4D version, or a clearer intended outcome. This is separate from answer coverage, reply count and Solved status; broad questions remain eligible.</p>
-      </details>
-    </div>
-    <div class="status" id="status" role="status" hidden></div>
-    <div id="results"></div>
-    <div class="more" id="more"></div>
-  </main>
+      <div id="facets"></div>
+      <section class="facet-box">
+        <label class="field">Solved <select id="solved"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+        <label class="field">Closed <select id="closed"><option value="any">Any</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+        <label class="field">Replies <select id="replies"><option value="any">Any</option><option value="zero">Unanswered (zero replies)</option><option value="some">Has replies</option><option value="unknown">Unknown</option></select></label>
+        <label class="field check"><input id="clarification" type="checkbox" aria-describedby="clarification-help"> Needs clarification</label>
+        <details class="clarification-help">
+          <summary id="clarification-help">What does Needs clarification mean?</summary>
+          <p>The model thinks answering requires missing details, such as reproduction steps, the environment, the 4D version, or a clearer intended outcome. This is separate from answer coverage, reply count and Solved status; broad questions remain eligible.</p>
+        </details>
+      </section>
+      <p class="small muted" id="meaning">Answer coverage is a model assessment, not the forum's Solved state. Unanswered means zero replies. Closed does not mean solved.</p>
+      <p class="small muted">Coverage circles use 0%, 25%, 50%, 75%, 100% fill as symbols for the five levels, not measured answer percentages or model confidence.</p>
+    </aside>
+
+    <main class="results tips-main" id="results-pane">
+      <p id="preview" class="status" hidden></p>
+      <p class="small muted" id="content-language">Thread summaries reuse existing English text, with French and Japanese translations when available. They are not newly extracted answers or remaining gaps.</p>
+      <p class="small muted" id="translation-coverage" aria-live="polite" hidden></p>
+      <p class="small muted" id="semantic-disclosure"></p>
+      <div class="toolbar tips-toolbar">
+        <button type="button" class="only-mobile btn" id="open-filters">Filters</button>
+        <p class="count" id="count" aria-live="polite">Loading…</p>
+        <div class="toolbar-right">
+          <label>Sort <select id="sort"><option value="new">Newest</option><option value="relevance">Relevance</option><option value="impact">Importance (impact)</option></select></label>
+        </div>
+      </div>
+      <div class="status" id="status" role="status" hidden></div>
+      <div id="results"></div>
+      <div class="more" id="more"></div>
+    </main>
+  </div>
   <footer class="footer" id="footer"></footer>
   <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
   <script type="module" src="../js/page-switcher.js"></script>
+  <script type="module" src="../js/filters-panel.js"></script>
   <script type="module" src="../js/questions.js"></script>
 </body>
 </html>

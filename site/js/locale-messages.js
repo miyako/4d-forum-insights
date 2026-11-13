@@ -95,6 +95,7 @@ const rows = [
   ['Confidence', 'Confiance', '確信度'],
   ['Minimum model confidence for the type', 'Confiance minimale du modèle pour le type', '分類に対するモデルの確信度の下限'],
   ['Any', 'Tous', '指定なし'], ['Since', 'Depuis', '開始年'], ['Sort', 'Tri', '並べ替え'],
+  ['Filters', 'Filtres', 'フィルター'], ['Clear all', 'Tout effacer', 'すべてクリア'], ['Done', 'Terminé', '完了'],
   ['Examples', 'Exemples', '検索例'], ['Loading…', 'Chargement…', '読み込み中…'],
   ['Any year', 'Toutes les années', 'すべての年'], ['Try:', 'Essayez :', '検索例：'],
   ['All areas', 'Tous les domaines', 'すべての分野'], ['All subjects', 'Tous les sujets', 'すべてのテーマ'],
