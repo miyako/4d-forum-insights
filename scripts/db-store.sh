@@ -7,10 +7,12 @@
 #
 #   scripts/db-store.sh pull [db]   download + decrypt into db   (default build/work.db)
 #   scripts/db-store.sh push [db]   compress + encrypt + upload  (VACUUMs a temp copy first)
+#   scripts/db-store.sh stage [db] [output]   encrypt without publishing
+#   scripts/db-store.sh restore [db] [input] decrypt a downloaded checkpoint
 #
 # Env: DB_KEY (required), DB_RELEASE (release tag, default "data"), GH_REPO (default: current repo)
 set -euo pipefail
-cmd=${1:?usage: db-store.sh pull|push [db]}
+cmd=${1:?usage: db-store.sh pull|push|stage|restore [db] [file]}
 db=${2:-build/work.db}
 if [ "$cmd" = push ] && [ "${DATA_PUBLICATION_CHILD:-}" != 1 ]; then
     exec python3 "$(dirname "$0")/publish_data.py" with-lock -- bash "$0" "$@"
@@ -31,20 +33,32 @@ ensure_release() {
 }
 
 case $cmd in
-pull)
+pull|restore)
     mkdir -p "$(dirname "$db")"
-    gh release download "$tag" --pattern "$asset" --dir "$tmp"
+    if [ "$cmd" = restore ]; then
+        cp "${3:?restore requires an encrypted input file}" "$tmp/$asset"
+    else
+        gh release download "$tag" --pattern "$asset" --dir "$tmp"
+    fi
     enc -d -in "$tmp/$asset" | zstd -d -q -o "$db.tmp" -f
     sqlite3 "$db.tmp" "PRAGMA integrity_check;" | grep -qx ok
     mv "$db.tmp" "$db"
     echo "pulled $tag/$asset -> $db ($(du -h "$db" | cut -f1))"
     ;;
-push)
+push|stage)
     [ -f "$db" ] || { echo "$db not found"; exit 1; }
     sqlite3 "$db" ".backup $tmp/forum.db"
+    sqlite3 "$tmp/forum.db" "PRAGMA integrity_check;" | grep -qx ok
     sqlite3 "$tmp/forum.db" "PRAGMA journal_mode=DELETE; VACUUM;" >/dev/null
     zstd -q -19 -T0 "$tmp/forum.db" -o "$tmp/forum.db.zst"
     enc -in "$tmp/forum.db.zst" -out "$tmp/$asset"
+    if [ "$cmd" = stage ]; then
+        output=${3:-build/delta-checkpoint/forum.db.zst.enc}
+        mkdir -p "$(dirname "$output")"
+        mv "$tmp/$asset" "$output"
+        echo "staged encrypted checkpoint -> $output"
+        exit 0
+    fi
     ensure_release
     if gh release download "$tag" --pattern "$asset" --dir "$tmp/prev" 2>/dev/null; then
         mv "$tmp/prev/$asset" "$tmp/forum.db.prev.zst.enc"
@@ -54,5 +68,5 @@ push)
     echo "pushed $db -> $tag/$asset ($(du -h "$tmp/$asset" | cut -f1))"
     ;;
 *)
-    echo "usage: db-store.sh pull|push [db]"; exit 2 ;;
+    echo "usage: db-store.sh pull|push|stage|restore [db] [file]"; exit 2 ;;
 esac

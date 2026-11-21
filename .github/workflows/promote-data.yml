@@ -1,0 +1,50 @@
+name: Promote reviewed site update
+
+on:
+  pull_request:
+    types: [closed]
+    paths: ['.github/data-updates/current.json']
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Human-merged candidate PR number (retry a failed/partial promotion)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+concurrency:
+  group: data-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REVIEW_PR: ${{ inputs.pr || github.event.pull_request.number }}
+    steps:
+      # Never execute candidate-branch code, including on a manual retry.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Verify approval, identities, hashes and both bases; promote and request Pages
+        run: |
+          set -euo pipefail
+          if ! [[ "$REVIEW_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::A positive human-merged PR number is required."
+            exit 1
+          fi
+          python3 scripts/review_updates.py promote --pr "$REVIEW_PR"

@@ -1,7 +1,8 @@
 # Weekly incremental update of all three views (main index, /tips/, /voices/):
 #   pull encrypted DB → fetch delta from discuss.4d.com → enrich + summary backfill (gemma-4-E4B)
 #   → classify + kb-classify + voices-classify (Kev-4B) → kb-write + voices-write (gemma-4-E4B)
-#   → export site data → embed new/changed topics → push DB + site data → deploy Pages
+#   → export + embed → private draft-release candidate → descriptor PR
+# Human merge promotes the reviewed bytes under the publication lease, then deploys Pages.
 #
 # Models run on the CPU of a standard ubuntu-latest runner (4 vCPU / 16 GB for public repos) with a
 # prebuilt llama.cpp release. Both model steps are time-boxed and resumable, so a large backlog is
@@ -49,8 +50,7 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
+  pull-requests: write
 
 concurrency:
   group: delta
@@ -60,19 +60,22 @@ jobs:
   delta:
     runs-on: ubuntu-latest
     timeout-minutes: 345
-    outputs:
-      published: ${{ steps.publish.outputs.published }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       DB_KEY: ${{ secrets.DB_KEY }}
       WORK_DB: ${{ github.workspace }}/build/work.db
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Check prerequisites
         id: pre
         run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Run delta only from the default branch; candidate code must be trusted."
+            exit 1
+          fi
           if [ -z "$DB_KEY" ]; then
             echo "::warning::secret DB_KEY is not set; see README.md (Delta updates). Nothing to do."; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -102,15 +105,9 @@ jobs:
           (cd pipeline && uv sync -q)
           npm ci --no-audit --no-fund
 
-      - name: Capture English publication base before reading or building
+      - name: Capture both live bases and restore DB under the publication lease
         if: steps.pre.outputs.ok == 'true'
-        run: python3 scripts/publish_data.py capture-english-base
-
-      - name: Pull working DB
-        if: steps.pre.outputs.ok == 'true'
-        run: |
-          scripts/db-store.sh pull "$WORK_DB"
-          sqlite3 "$WORK_DB" "SELECT COUNT(*) AS topics, COUNT(enriched_at) AS enriched FROM topics;"
+        run: python3 scripts/review_updates.py prepare --db "$WORK_DB"
 
       - name: Install llama.cpp (prebuilt, CPU)
         if: steps.pre.outputs.ok == 'true' && inputs.skip_models != true
@@ -125,6 +122,7 @@ jobs:
           echo "LLAMA_SERVER=/opt/llama/llama-server" >> "$GITHUB_ENV"
 
       - name: Fetch delta, run the models (main, Tips, Voices)
+        id: process
         if: steps.pre.outputs.ok == 'true'
         env:
           FMINER_DB: ${{ github.workspace }}/build/work.db
@@ -147,9 +145,12 @@ jobs:
           fi
           pipeline/ci/run-delta.sh
 
-      - name: Save working DB
-        if: always() && steps.pre.outputs.ok == 'true'
-        run: scripts/db-store.sh push "$WORK_DB"
+      - name: Save encrypted checkpoint on a private draft release (also on model failure)
+        id: checkpoint
+        if: >-
+          always() && !cancelled() && steps.pre.outputs.ok == 'true' &&
+          (steps.process.outcome == 'success' || steps.process.outcome == 'failure')
+        run: python3 scripts/review_updates.py checkpoint --db "$WORK_DB"
 
       - name: Previous site data (embedding cache)
         if: steps.pre.outputs.ok == 'true'
@@ -169,18 +170,24 @@ jobs:
           make snapshot data CAPTURE_ENGLISH_BASE=0 FMINER_DB_SRC="$WORK_DB"
           EMBED_THREADS=4 make embeddings
 
-      - name: Publish site data
-        id: publish
+      - name: Stage immutable candidate and open descriptor-only review PR
+        id: candidate
         if: steps.pre.outputs.ok == 'true'
-        run: |
-          python3 scripts/publish_data.py publish-site
-          echo "published=true" >> "$GITHUB_OUTPUT"
+        run: python3 scripts/review_updates.py candidate
 
       - name: Summary
         if: always() && steps.pre.outputs.ok == 'true'
+        env:
+          CHECKPOINT_OUTCOME: ${{ steps.checkpoint.outcome }}
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
         run: |
           {
             echo "### Delta update"
+            echo "No live data upload or deployment."
+            echo "Encrypted checkpoint: $CHECKPOINT_OUTCOME; candidate/PR: $CANDIDATE_OUTCOME."
+            echo "Only successful checkpoint uploads preserve progress. Review successful candidates before merge."
+            echo "Human merge triggers promotion only if both original English and encrypted DB bases still match."
+            echo "Questions is excluded. Localization is review-only."
             echo '```'
             sqlite3 "$WORK_DB" "SELECT key, value FROM state WHERE key LIKE 'last_%';" || true
             sqlite3 "$WORK_DB" "SELECT 'topics', COUNT(*), 'enriched', COUNT(enriched_at) FROM topics;" || true
@@ -189,12 +196,3 @@ jobs:
             sqlite3 "$WORK_DB" "SELECT 'voices write-ups', COUNT(question), 'errors', COUNT(error) FROM voices_entries;" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  pages:
-    needs: delta
-    if: needs.delta.outputs.published == 'true'
-    uses: ./.github/workflows/pages.yml
-    permissions:
-      contents: read
-      pages: write
-      id-token: write

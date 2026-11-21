@@ -671,14 +671,16 @@ class WorkflowPermissionsTests(unittest.TestCase):
         self.assertLess(pages.index("Install approved Questions public preview"), pages.index("prepare-localization"))
         self.assertIn("check-questions-localization --data site/data", pages)
 
-    def test_localization_publisher_can_upload_assets_and_dispatch_pages(self):
+    def test_localization_review_job_cannot_upload_release_assets_or_dispatch_pages(self):
         workflow = (Path(__file__).parents[1] / ".github/workflows/localization.yml").read_text()
         job = workflow.split("\n  localize:\n", 1)[1].split("\n  translation-status:", 1)[0]
         match = re.search(r"^    permissions:\n((?:^      [^\n]+\n)+)", job, re.MULTILINE)
-        self.assertIsNotNone(match, "The publication job needs explicit token permissions")
+        self.assertIsNotNone(match, "The review job needs explicit read-only token permissions")
         permissions = dict(line.strip().split(": ", 1) for line in match.group(1).splitlines())
-        self.assertEqual(permissions.get("contents"), "write")
-        self.assertEqual(permissions.get("actions"), "write")
+        self.assertEqual(permissions.get("contents"), "read")
+        self.assertNotIn("actions", permissions)
+        self.assertNotIn("publish-localization", job)
+        self.assertNotIn("--deploy", job)
 
 
 if __name__ == "__main__":

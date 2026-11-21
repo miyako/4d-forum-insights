@@ -1,6 +1,6 @@
 # Delta updates: one-time setup of `DB_KEY` and the encrypted DB
 
-The weekly [delta workflow](../.github/workflows/delta.yml) needs the pipeline's working database from the previous run. This page explains where that database lives, what `DB_KEY` is, and how to set both up once.
+The weekly [delta workflow](../.github/workflows/delta.yml) needs the pipeline's last approved working database. This page explains where that database lives, what `DB_KEY` is, and how to set both up once.
 
 ## What is what
 
@@ -75,7 +75,7 @@ gh release view data -R miyako/4d-forum-insights      # check: forum.db.zst.enc 
 
 ## After setup
 
-- The delta workflow runs every Monday at 03:17 UTC. To run it now: `gh workflow run delta.yml -R miyako/4d-forum-insights`.
+- The delta workflow runs every Monday at 03:17 UTC and creates a private draft candidate plus a review PR, not a live update. Manual dispatch and its existing budgets/skip controls remain available from the default branch.
 - **Local runs** (the fallback in the README) read the key the same way:
 
   ```sh
@@ -93,11 +93,98 @@ gh release view data -R miyako/4d-forum-insights      # check: forum.db.zst.enc 
   Copies encrypted with the old key cannot be decrypted with the new one. Each push keeps the previous copy as `forum.db.prev.zst.enc`, so after the second push both assets use the new key.
 - To update an existing Keychain entry, add `-U`: `security add-generic-password -U -a "$USER" -s 4d-forum-insights-DB_KEY -w "<new>"`.
 
+## Review-before-live updates
+
+The scheduled/manual delta has no Pages or workflow-dispatch permissions. It can create
+draft releases and pull requests; enable **Allow GitHub Actions to create and approve
+pull requests** in repository Actions settings (the workflow itself never approves or
+merges a PR). No PAT or new signing/encryption key is required.
+
+`scripts/review_updates.py prepare` acquires the existing publication lease, downloads
+both live English and encrypted DB assets, records each immutable asset ID and exact
+SHA256, and restores the captured DB locally before releasing the lease. Export retains
+the original English provenance; it never recaptures around an old result.
+`checkpoint` compresses/encrypts the working DB with the existing AES-256-CBC/PBKDF2
+settings and stores it on `delta-candidate-RUN_ID-ATTEMPT`, an **unpublished draft release**.
+Successful exports add `site-data.tar.gz` and `base.json` without clobbering candidate files.
+Failed model progress stays encrypted on the draft but has no promotable PR.
+Cancellation/runner loss may prevent checkpoint creation; no promise of persistence is
+made for a terminated runner.
+
+The bot opens `data-update-RUN_ID-ATTEMPT` with only
+`.github/data-updates/current.json`. The descriptor binds repository, source commit,
+run/attempt, draft-release ID, immutable asset IDs/sizes and every full-file SHA256.
+The archive includes embeddings but excludes localization and Questions payloads.
+The archive validator rejects private-preview flags, enabled Questions manifests,
+Questions file paths, escaping/noncanonical paths, symlinks and duplicate members.
+No generated corpus or plaintext DB enters Git, PR comments or Actions artifacts.
+Draft release assets require write access in this public repository; keep these
+releases unpublished. They are durable, not an expiring Actions cache.
+
+After **human merge**, `promote-data.yml` checks out trusted default-branch code.
+It re-reads the merged PR and descriptor from GitHub, requires a same-repository,
+bot-created, descriptor-only PR merged by a human, and verifies its head/merged
+descriptor, original successful default-branch delta run/attempt and bot-owned draft.
+It downloads and validates all reviewed bytes before entering the publication lease.
+Inside the lease it checks **both** original live bases, backs up the original encrypted
+DB on the draft, promotes the approved checkpoint (keeping `forum.db.prev.zst.enc`)
+and English archive, then dispatches Pages from the default branch.
+The merge alone does not guarantee a successful upload/deployment: inspect the promotion
+and Pages results. Merging while the delta run is still unfinished fails closed;
+retry after the originating run succeeds.
+
+An ordinary main-branch Pages build still reads the approved `data` release. Descriptor
+PRs do not trigger a pre-merge Pages deployment. Local/manual publication remains a
+separate explicitly authorized operation and invalidates pending candidates' bases.
+Questions processing/export is **not automated**. The separate approved-preview
+configuration and existing preview asset are not changed by delta or promotion.
+Localization is also **not automatically published**: its workflow only retains
+review checkpoints; use the existing source-hash-validating local publisher after
+separate review/authorization.
+
+### Partial promotion and retry
+
+GitHub release clobber is not atomic across files. Before each live replacement,
+promotion appends an immutable `promotion-NNNNNN.json` journal on its private draft,
+binding the descriptor hash, PR, current asset IDs/hashes and pending operation.
+It marks an asset complete only after re-downloading the approved bytes.
+It never requests Pages until both assets are complete. An existing public deployment
+is unchanged by a failed upload, but another explicitly requested Pages build during
+partial recovery could observe incomplete release data; finish recovery before
+running other publishers or Pages builds.
+
+For a retry, manually dispatch **Promote reviewed site update** on the default branch
+with the original merged PR number. No models or rebuilding are involved.
+The retry re-verifies PR/run/candidate identity and all file hashes. It accepts unchanged
+recorded live assets, or (only for the journal's pending asset) absence caused by clobber
+or the exact approved bytes whose upload succeeded before acknowledgement/journaling.
+A different intervening publication fails closed; never rewrite the original bases.
+Completed retries do not re-upload or re-dispatch. A lost Pages dispatch acknowledgement
+can cause an extra deployment request; both serve approved release data.
+
+A hard-killed publisher can leave the shared lease held. Follow the owner/SHA-based
+[lease recovery](#recovering-a-crashed-publisher), then retry the same PR.
+Do not delete the draft or its journal/backup during a pending promotion. Cleanup of
+old reviewed/rejected drafts is a separate explicit maintainer task; it is not automatic.
+If a different publisher changed a partially promoted release, inspect and explicitly
+restore/reconcile the approved state before constructing a fresh candidate.
+An incomplete/zero-byte journal upload also fails closed with its exact asset ID.
+After verifying that the original publisher has stopped and recovering any held lease,
+inspect the failed asset and preceding valid journal against the live identities.
+Remove only that confirmed incomplete upload before retrying; never delete a valid
+journal record or guess recovery from asset age. Promotion performs no automatic
+journal deletion or rollback.
+
+Offline tests:
+`python3 -m unittest discover -s tests -p 'test_*updates.py'` and
+`python3 -m unittest discover -s tests -p test_publish_data.py`.
+
 ## Race-safe publication (CI and local)
 
 Use `make publish` for local English publication, not `gh release upload --clobber`.
-It calls `python3 scripts/publish_data.py publish-site --deploy`. The delta workflow
-uses the same publisher without dispatching a second Pages run. Both publish only
+It calls `python3 scripts/publish_data.py publish-site --deploy`. Delta instead uses
+the merge-bound review protocol above, which shares the same durable lease.
+Both publication paths publish only
 English data: `data/locales` is deliberately excluded even if the local export
 contains old translations. English publication never reads or depends on localization.
 English publication requires **base-asset CAS provenance**, not a timestamp
@@ -160,7 +247,7 @@ Do not use unverified `capture-english-base` plus `seal-english-candidate` to
 launder an existing artifact. For a new corpus export, capture before reading its
 source and build/seal normally instead.
 
-The localization workflow calls:
+After separately reviewing and authorizing retained localization checkpoints, a maintainer can call:
 
 ```sh
 python3 scripts/publish_data.py publish-localization --store build/localization --deploy
@@ -173,7 +260,7 @@ started before an English update therefore cannot overwrite that update or repla
 a current translation with an obsolete one. Pages extracts the optional overlay
 asset independently after English; the browser additionally checks each source hash.
 
-All cooperating release writers (including encrypted DB pushes) acquire the same
+All cooperating live release writers (including encrypted DB pushes) acquire the same
 repository-wide `refs/heads/data-publication-lock` ref by atomic REST create-ref.
 Its commit identifies the owner (Actions run ID or local host/PID and unique nonce).
 Release reads, merges and writes stay inside that lease. The ref survives crashes;
@@ -243,16 +330,16 @@ re-rating, embedding rebuild or corpus changes are part of localization. The cur
 for the source-hash and empty-field contract.
 
 The [localization workflow](../.github/workflows/localization.yml) runs on the
-`english-data-published` repository dispatch sent after every successful production
-English upload, including delta and local `make publish`, or by manual dispatch.
+`english-data-published` repository dispatch sent by local `make publish`, or by manual
+dispatch. Review-protocol promotion deliberately does not send a localization dispatch.
 Dispatch is best-effort: a dispatch failure warns without failing or rolling back
 English publication. Retry localization manually if needed. Model/credential
-failures occur only in the separate localization workflow. `contents: write`
+failures occur only in the separate localization workflow. The local publisher's `contents: write`
 allows sending the dispatch with `github.token`; repository dispatch is an
 exception to GitHub's normal token-trigger recursion suppression.
-The localization publishing job also needs `actions: write` on its `github.token`
-to dispatch the Pages workflow after uploading overlays. This job-level permission
-is separate from the Copilot authentication secret and requires no PAT scope change.
+The localization job has only `contents: read`: it cannot upload release overlays or
+dispatch Pages. Successful translations are retained for separate maintainer review
+and explicitly authorized local publication, using the existing publication lease.
 Set repository
 variable `LOCALIZATION_MODEL` to an explicitly available hosted model and secret
 `COPILOT_GITHUB_TOKEN` to a token authorized for Copilot CLI; there is no implicit
@@ -262,11 +349,13 @@ tools and built-in MCPs disabled by the runner.
 
 Manual dispatch accepts `page` (`all`, `requests`, `tips`, `voices`), `locale` (`all`, `fr`,
 `ja`), `entries` (1–1000), `minutes` (1–40), and `batch_size` (1–50). Defaults are
-all/all/100/20/20. Successful batches are checkpointed and published even when
+all/all/100/20/20. Successful batches are checkpointed (not published), even when
 another batch fails. A separate **Translation status** job still fails for model,
 authentication, or infrastructure errors; inspect the coverage summary and
 14-day `localization-progress` artifact. Translation-budget exhaustion alone can
-leave missing entries without being an error; subsequent runs resume them.
+leave missing entries without being an error. Until reviewed checkpoints are explicitly
+published, another hosted run starts from the currently approved overlays rather than
+automatically resuming unpublished artifacts.
 The workflow ignores dispatch payloads and always fetches current release assets
 using trusted default-branch code, never a triggering PR head or its artifacts.
 

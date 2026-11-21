@@ -350,13 +350,19 @@ underlying English matches the current asset. Missing provenance fails closed; `
 captures a fresh base on demand. See [English publication and promotion](delta-setup.md#race-safe-publication-ci-and-local)
 for exact capture/seal/adoption commands.
 
-After every production English upload, the shared publisher sends an `english-data-published`
-repository dispatch, covering both delta and local/manual `make publish`. Dispatch failure only warns:
+After local/manual `make publish`, the shared publisher sends an `english-data-published`
+repository dispatch. The [review-gated delta promoter](delta-setup.md#review-before-live-updates)
+does not dispatch localization. Dispatch failure only warns:
 English remains published, and localization can be started manually. Model/authentication failures
 also cannot roll back or block English publication. The hosted workflow ignores dispatch payloads,
 checks out trusted default-branch code, and downloads current release assets.
 Manual inputs are `page` (all/requests/tips/voices), `locale` (all/fr/ja), `entries` (1–1000),
 `minutes` (1–40), and `batch_size` (1–50); defaults are all/all/100/20/20.
-Partial successes publish even if translation fails, while a separate **Translation status** job
+The hosted job is read-only for release data: partial successes are retained for review,
+**never published or deployed**, even if translation fails. After separate review/authorization,
+use the local publisher above; automatic localization PR/promotion is not implemented.
+A separate **Translation status** job
 reports model/authentication/infrastructure failures. Coverage and partial checkpoints are retained
 in the job summary and the 14-day `localization-progress` artifact.
+Until checkpoints are explicitly published, new hosted runs start from approved release
+overlays, not another run's unpublished artifacts.

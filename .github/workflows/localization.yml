@@ -1,4 +1,4 @@
-name: Localize summaries
+name: Localize summaries for review
 
 on:
   repository_dispatch:
@@ -26,7 +26,7 @@ on:
         default: '20'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: localization
@@ -37,8 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 80
     permissions:
-      contents: write
-      actions: write
+      contents: read
     outputs:
       runner_outcome: ${{ steps.translate.outcome }}
     steps:
@@ -118,15 +117,6 @@ jobs:
             --batch-size "$BATCH_SIZE" --entries "$ENTRY_BUDGET" --minutes "$MINUTE_BUDGET" \
             --workers 1 --timeout 180 --retries 2 --report build/localization-report.json
 
-      - name: Publish retained successful batches and deploy
-        if: >-
-          always() && !cancelled() && steps.prepare.outcome == 'success' &&
-          (steps.translate.outcome == 'success' || steps.translate.outcome == 'failure')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: python3 scripts/publish_data.py publish-localization --store build/localization --deploy
-
       - name: Coverage and outcome summary
         if: always()
         env:
@@ -135,7 +125,9 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          lines = ["### Localization", f"Translator outcome: {os.environ['RUNNER_OUTCOME'] or 'not started'}"]
+          lines = ["### Localization", f"Translator outcome: {os.environ['RUNNER_OUTCOME'] or 'not started'}",
+                   "Review-only checkpoints: no release upload or Pages deployment. "
+                   "A maintainer must explicitly review and publish overlays separately."]
           report = Path("build/localization-report.json")
           if report.is_file():
               data = json.loads(report.read_text())

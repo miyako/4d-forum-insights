@@ -1,6 +1,6 @@
 # Deploy the static site to GitHub Pages.
 # The data (site/data) is not committed: it is published as the asset site-data.tar.gz on the "data"
-# release (by `make publish` or the delta workflow) and unpacked into the site at deploy time.
+# release (by reviewed promotion or explicit `make publish`) and unpacked at deploy time.
 name: Deploy Pages
 
 on:

@@ -71,10 +71,11 @@ flowchart LR
 | `scripts/build_data.py` | Exports the published data from `forum.db`, opened read-only. |
 | `scripts/build_embeddings.mjs` | Builds the quantised topic embeddings, incrementally. |
 | `scripts/localize.mjs`, `localization/` | Resumable frontier-model translation and portable seed overlays, independent of the encrypted DB. |
-| `scripts/db-store.sh` | Pulls/pushes the delta workflow's encrypted working DB. |
+| `scripts/db-store.sh` | Pulls/pushes or locally stages/restores encrypted working DB checkpoints. |
+| `scripts/review_updates.py` | Private draft candidates, descriptor-only PRs, and verified human-merge promotion. |
 | `pipeline/` | A vendored copy of the `fminer` pipeline plus the `delta` command (see `pipeline/README.md`). |
 | `.github/workflows/pages.yml` | Deploys the site with `actions/deploy-pages`. |
-| `.github/workflows/delta.yml` | Weekly incremental update. |
+| `.github/workflows/delta.yml`, `.github/workflows/promote-data.yml` | Weekly review candidate; live update only after human merge. |
 | `tests/` | `node --test` unit tests for state, filters, sorting, search, decoding and the tips page logic. |
 
 ### Published data format
@@ -157,7 +158,7 @@ hash-keyed localization cache for eventual finalization; it does not resume proc
 
 ## Delta updates
 
-`.github/workflows/delta.yml` runs every Monday at 03:17 UTC (12:17 JST) and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models or only the Tips/Voices steps, and a full re-list). It updates all three views: the main index, `/tips/` and `/voices/`. The steps are:
+`.github/workflows/delta.yml` runs every Monday at 03:17 UTC (12:17 JST) and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models or only the Tips/Voices steps, and a full re-list). Run it from the default branch only. It prepares updates for the main Requests index (including bugs/features and all topics), `/tips/` and `/voices/`, **without changing live release assets or deploying**. Questions processing/export is not part of this automation; separately approved public preview assets are unchanged. The steps are:
 
 1. **Pull** the working DB, an encrypted release asset (see below).
 2. **Fetch the delta** with `fminer delta`, using the same polite `4d` User-Agent as the scraper. It checks `robots.txt` before fetching (`User-agent: 4d` is allow-listed) and throttles to about 1 request per second.
@@ -171,8 +172,16 @@ hash-keyed localization cache for eventual finalization; it does not resume proc
    - With the same Kev server, **Tips** (`kb-classify --stale`) and **Voices** (`voices-classify --stale`) rate new and changed topics.
    - gemma then starts again to **write** the new Tips entries (`kb-write`) and Voices write-ups (`voices-write`).
    - All model steps are time-boxed (`--budget-minutes`) and resumable, so a backlog spreads over several runs. The defaults are 180 min for enrich + backfill, 90 for classify, 45 for the Tips + Voices classify steps and 60 for the Tips + Voices write steps. `DEADLINE` (300 min) caps the whole step, so the later steps shrink or are skipped when the earlier ones run long; the main index always goes first.
-4. **Save** the DB. This runs even if a later step fails, so progress is never lost.
-5. **Export** with `make data`, **embed** only the new or changed topics (the previous `site-data.tar.gz` is the cache), upload `site-data.tar.gz`, and **deploy** Pages.
+4. **Save** an encrypted checkpoint on the per-run **draft** release, also after model failure. Draft releases are private to repository writers; they must never be published. A runner cancellation/timeout may interrupt saving.
+5. **Export** with `make data`, **embed** only the new or changed topics (the previous `site-data.tar.gz` is the cache), retain immutable candidate files on that draft, and open a **descriptor-only PR**. No generated corpus is committed.
+6. **Human review and merge** authorizes `.github/workflows/promote-data.yml` to verify the original successful run, draft/asset identities, all file hashes (including embeddings), and **both English and encrypted DB bases** under the existing publication lease. Only then does it promote the exact approved data and request Pages. Changed bases reject stale candidates; partial promotions have a durable retry journal. See [promotion and recovery](docs/delta-setup.md#review-before-live-updates).
+
+The repository must allow GitHub Actions to create pull requests. An open candidate does not
+advance the live DB: subsequent runs start from the last approved checkpoint. Review/merge one
+candidate at a time; a candidate built from an older base must be rebuilt, not rebased by rewriting
+its hashes. Draft candidates persist until a maintainer explicitly deletes them.
+Localization workflows retain translation checkpoints for **separate review**, never upload or
+deploy them automatically. Missing/stale translations still fall back to English.
 
 ### Running the models on GitHub-hosted runners
 
@@ -192,7 +201,7 @@ There is no GPU, so the models run on the CPU of a standard `ubuntu-latest` runn
 
 The pipeline DB is about 160 MB. It contains full thread text, and this repository is public.
 
-- The DB is therefore never committed. Instead it is stored, **zstd-compressed and AES-256 encrypted** (about 47 MB), as the asset `forum.db.zst.enc` on the `data` release, with the previous copy kept as `forum.db.prev.zst.enc`.
+- The DB is therefore never committed. It is **zstd-compressed and AES-256 encrypted** (about 47 MB), staged on a private per-run draft, and promoted to `forum.db.zst.enc` on the `data` release after review. The previous approved copy is kept as `forum.db.prev.zst.enc`.
 - The passphrase is the repository secret `DB_KEY`.
 - Release assets survive indefinitely and have no size problem. The Actions cache would be evicted after 7 days of inactivity.
 
@@ -208,7 +217,9 @@ Until the DB is seeded, the delta workflow logs a warning and does nothing.
 
 ### Local fallback (e.g. a Mac with Metal)
 
-If CPU runs are too slow, or there is a backlog, run the same delta locally and push the results:
+If CPU runs are too slow, or there is a backlog, run the same delta locally. The final two
+commands below are **explicit maintainer publication**, outside the automated PR protocol;
+review the results first and do not use them during recovery of a partial promotion:
 
 ```sh
 export DB_KEY="$(security find-generic-password -s 4d-forum-insights-DB_KEY -w)"   # same passphrase as the secret
@@ -218,7 +229,7 @@ make db-push                                       # save the DB for the next Ac
 make snapshot data embeddings FMINER_DB_SRC=build/work.db && make publish
 ```
 
-The local llama-servers listen on ports 18081 and 18080, so they never collide with an upstream pipeline on 8081 and 8080. You can also run the workflow with `skip_models: true` to fetch on Actions only, and run the models locally later.
+The local llama-servers listen on ports 18081 and 18080, so they never collide with an upstream pipeline on 8081 and 8080. A workflow run with `skip_models: true` stages a fetch-only candidate; it does not update the live DB until human merge.
 
 ## Notes on the data
 
