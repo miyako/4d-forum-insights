@@ -250,7 +250,7 @@ English pilot establishes corpus-wide accuracy.
 | Multilingual semantic search | `onnx-community/embeddinggemma-2-ONNX` | ONNX q4 inference; fp16 WASM fallback; native 768-dimensional sentence embeddings truncated to 256 MRL dimensions, normalized and stored as int8 |
 | Decision ratings | `ggml-org/Kev-4B-GGUF:Q8_0` | GGUF Q8_0 through llama.cpp |
 | Source-to-English enrichment and readable summaries | `ggml-org/gemma-4-E4B-it-GGUF:Q8_0` | GGUF Q8_0 through llama.cpp; reuse existing enrichment |
-| Published-field display translations | GPT-6.1 Sol (`gpt-6.1-sol`) | Hosted frontier model, selected by the repository's `LOCALIZATION_MODEL` variable; provider-managed precision |
+| Published-field display translations | GPT-6.1 Sol (`gpt-6.1-sol`) | Historical preview translations; future authorized runs select an available OpenAI API model via `OPENAI_MODEL` |
 
 Embedding inference uses Transformers.js 4.3.1 and revision
 `daa72c51243991dfcaf9f9137d2c573d8f7790c0`. The published manifest checked on 2026-11-07 contains

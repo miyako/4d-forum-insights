@@ -66,31 +66,32 @@ Requests also masks bare uppercase commands/constants, dotted API paths and call
 underscore identifiers. Its batch/text-cache `protection_version` is `2`; stale masked batches are
 rejected. Tips/Voices masking and portable overlay `translation_version: "1"` remain unchanged.
 
-## Local frontier-model backfill
+## OpenAI API backfill
 
-Authenticate the installed Copilot CLI normally. Do not copy credentials into this repository.
-Select an available **hosted frontier model** explicitly; the runner never substitutes a local small model.
-For example, after checking that the account supports the selected model:
+Set `OPENAI_API_KEY` in the environment and choose an OpenAI API model explicitly via `OPENAI_MODEL`
+or `--model`. Model availability in Copilot does not establish availability through the OpenAI API.
+Do not copy credentials into this repository. Requests are sent to the OpenAI Chat Completions API,
+with no tools enabled and JSON output requested. API calls may incur charges.
+For example, after checking that the API account supports the selected model:
 
 ```sh
 node scripts/localize.mjs --data site/data --store localization \
-  --page voices --locale all --model "$LOCALIZATION_MODEL" \
+  --page voices --locale all --model "$OPENAI_MODEL" \
   --batch-size 15 --entries 554 --minutes 45 --workers 4
 node scripts/localize.mjs --data site/data --store localization \
-  --page tips --locale all --model "$LOCALIZATION_MODEL" \
+  --page tips --locale all --model "$OPENAI_MODEL" \
   --batch-size 30 --entries 20574 --minutes 180 --workers 4
 node scripts/localize.mjs --data site/data --store localization \
-  --page requests --locale all --model "$LOCALIZATION_MODEL" \
+  --page requests --locale all --model "$OPENAI_MODEL" \
   --batch-size 15 --entries 34034 --minutes 180 --workers 4
 ```
 
 Each successful batch is atomically persisted immediately; reruns translate only missing/stale records.
 `--entries` counts locale-records (a topic translated into two languages counts twice). `--minutes` caps
-wall time, `--timeout` caps an individual CLI call, `--retries` is capped at three, and `--workers` at eight.
-`--reasoning-effort low` can reduce backfill overhead if the configured frontier model supports it;
+wall time, `--timeout` caps an individual API call, `--retries` is capped at three, and `--workers` at eight.
+`--reasoning-effort low` can reduce backfill overhead if the configured OpenAI model supports it;
 otherwise leave it unset (or set `LOCALIZATION_REASONING_EFFORT` to a supported effort).
-The CLI exposes no tools to the translator and disables built-in MCP access. The published text is treated
-as untrusted data, never as instructions. A store lock prevents simultaneous local writers. After an
+The published text is treated as untrusted data, never as instructions. A store lock prevents simultaneous local writers. After an
 interruption, verify no runner still owns it before removing the exact `<store>.lock` directory.
 
 `build/localization-report.json` records actual current/stale/missing coverage and failed IDs; `complete` is
@@ -104,13 +105,13 @@ For the larger initial Requests corpus, use the exact-string deduplicating runne
 
 ```sh
 node scripts/backfill-requests.mjs --data site/data --store build/localization-requests \
-  --locale all --model gpt-6.1-sol --reasoning-effort low \
+  --locale all --model "$OPENAI_MODEL" \
   --batch-size 30 --entries 100000 --minutes 300 --workers 8 --timeout 300
 node scripts/backfill-requests.mjs --data site/data --store build/localization-requests \
   --locale all --check-only --require-complete
 ```
 
-Check model availability with the locally authenticated CLI first. This runner translates each identical
+Check model availability for the API account first. This runner translates each identical
 nonempty generated string once per locale, across title, line and paragraph fields and topic IDs. The
 17,017-topic snapshot contains 41,042 unique strings per locale; `--entries` here budgets **locale-strings**,
 not the locale-records counted by `localize.mjs`. It interleaves locales, caps workers at eight, validates
@@ -180,7 +181,7 @@ field when its sibling changes:
 ```sh
 node scripts/backfill-requests.mjs --page questions \
   --data build/questions-public/site/data --store localization --locale all \
-  --model gpt-6.1-sol --reasoning-effort low --workers 1 --batch-size 10 \
+  --model "$OPENAI_MODEL" --workers 1 --batch-size 10 \
   --entries 60 --minutes 15 --timeout 300 --require-complete \
   --reuse-store build/questions-localization-seeds/store \
   --reuse-data build/questions-preview-base/data \
@@ -234,7 +235,7 @@ missing-string translation. A bounded writable checkpoint can then use:
 ```sh
 node scripts/backfill-requests.mjs --page questions \
   --data build/questions-expanded-ui/data --store localization --locale all \
-  --model gpt-6.1-sol --reasoning-effort low --workers 2 --batch-size 40 \
+  --model "$OPENAI_MODEL" --workers 2 --batch-size 40 \
   --entries 800 --minutes 10 --timeout 300 --retries 2
 ```
 
@@ -251,15 +252,13 @@ locale/page/batch/time/entry budgets. It does **not** download a generative mode
 
 For this personal repository:
 
-1. Create a fine-grained PAT with **Copilot Requests** permission and an appropriate Copilot subscription.
-2. Save it as repository secret `COPILOT_GITHUB_TOKEN`.
-3. Set repository variable `LOCALIZATION_MODEL` to a hosted frontier model ID actually available to that
-   account. The desktop agent's model is not automatically available in Actions.
+1. Save an OpenAI API key as repository secret `OPENAI_API_KEY`.
+2. Set repository variable `OPENAI_MODEL` to a Chat Completions model available to that API account.
+3. Optionally set `LOCALIZATION_REASONING_EFFORT` to `low`, `medium`, or `high` if the chosen model supports it.
 
-The normal `github.token` is for release writes, **not** assumed to authorize Copilot requests.
-Organization policy-based `GITHUB_TOKEN` support is a different setup and is not assumed here.
-Missing credentials/model configuration are reported explicitly. Never log token values or store them in
-artifacts. See [GitHub's Actions authentication guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/automate-with-actions).
+The normal `github.token` remains responsible for release writes and Pages dispatch, not model requests.
+Until the key and model are configured, localization fails explicitly; English publication remains independent.
+Never log or commit API keys. Existing translations retain their original provenance and are reused when current.
 
 Initial backfill artifacts are prepared locally for review; creating the PR does not merge it, upload a
 production data release or deploy Pages. Review coverage before promoting a seed or resuming a backlog.
@@ -276,7 +275,7 @@ python3 scripts/publish_data.py prepare-localization \
   --data site/data --seeds localization --store build/localization \
   --archive build/published/localization.tar.gz
 node scripts/localize.mjs --data site/data --store build/localization \
-  --page all --locale all --model "$LOCALIZATION_MODEL" \
+  --page all --locale all --model "$OPENAI_MODEL" \
   --batch-size 20 --entries 100 --minutes 20 --workers 1 --timeout 180 --retries 2 \
   --report build/localization-report.json
 ```
