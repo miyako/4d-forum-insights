@@ -7,7 +7,7 @@ import {
   VERSION, REQUESTS_PROTECTION_VERSION, LOCALES, sourceHash, protect, restore, readSourceRecords,
   readOverlay, writeOverlay, coverage,
 } from './localization.mjs';
-import { callCopilot } from './localize.mjs';
+import { callOpenAI } from './localize.mjs';
 
 const fields = text => ({ title_en: text, line: '', para: '' });
 export const UNIT_PROMPT_VERSION = 'forum-summary-units-v1';
@@ -203,17 +203,17 @@ function positive(value, name, maximum) {
   return n;
 }
 
-export async function main(args = process.argv.slice(2), { translate = callCopilot } = {}) {
+export async function main(args = process.argv.slice(2), { translate = callOpenAI } = {}) {
   const { values: v } = parseArgs({ args, options: {
     data: { type: 'string', default: 'site/data' }, store: { type: 'string', default: 'build/localization-requests' },
     page: { type: 'string', default: 'requests' },
     'reuse-data': { type: 'string' }, 'reuse-store': { type: 'string' },
     'reuse-provenance': { type: 'string' },
-    locale: { type: 'string', default: 'all' }, model: { type: 'string', default: process.env.LOCALIZATION_MODEL },
+    locale: { type: 'string', default: 'all' }, model: { type: 'string', default: process.env.OPENAI_MODEL },
     workers: { type: 'string', default: '8' }, 'batch-size': { type: 'string', default: '30' },
     minutes: { type: 'string', default: '300' }, entries: { type: 'string', default: '100000' },
     timeout: { type: 'string', default: '240' }, retries: { type: 'string', default: '2' },
-    'reasoning-effort': { type: 'string', default: 'low' }, 'check-only': { type: 'boolean', default: false },
+    'reasoning-effort': { type: 'string', default: process.env.LOCALIZATION_REASONING_EFFORT }, 'check-only': { type: 'boolean', default: false },
     'require-complete': { type: 'boolean', default: false },
     'upgrade-protection': { type: 'boolean', default: false },
     'seed-only': { type: 'boolean', default: false },
@@ -233,7 +233,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   const deadline = Date.now() + positive(v.minutes, 'minutes', 300) * 60000;
   const budget = positive(v.entries, 'entries', 100000), timeout = positive(v.timeout, 'timeout', 600) * 1000;
   const retries = positive(v.retries, 'retries', 3);
-  if (!['low', 'medium', 'high'].includes(v['reasoning-effort'])) throw Error('Invalid reasoning effort');
+  if (v['reasoning-effort'] && !['low', 'medium', 'high'].includes(v['reasoning-effort'])) throw Error('Invalid reasoning effort');
   const records = readSourceRecords(v.data, v.page), units = stringUnits(records);
   fs.mkdirSync(v.store, { recursive: true });
   const lock = `${path.resolve(v.store)}.lock`;

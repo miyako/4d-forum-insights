@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
@@ -24,30 +23,62 @@ ${JSON.stringify({ batch_id: batch.batch_id, page: batch.page, locale: batch.loc
     records: batch.records.map(({ id, fields }) => ({ id, fields })) })}`;
 }
 
-export function callCopilot(prompt, { model, timeout = 180000, executable = 'copilot', reasoningEffort } = {}) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p', prompt, '-s', '--no-ask-user', '--model', model,
-      '--available-tools', '', '--disable-builtin-mcps', '--sync-session=off'];
-    if (reasoningEffort) args.push('--reasoning-effort', reasoningEffort);
-    const child = spawn(executable, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '', error = '', expired = false;
-    const timer = setTimeout(() => { expired = true; child.kill('SIGTERM'); }, timeout);
-    const killTimer = setTimeout(() => child.kill('SIGKILL'), timeout + 5000);
-    child.stdout.on('data', data => {
-      output += data;
-      if (output.length > 8_000_000) { expired = true; child.kill('SIGTERM'); }
-    });
-    child.stderr.on('data', data => { error = (error + data).slice(-6000); });
-    child.on('error', err => { clearTimeout(timer); clearTimeout(killTimer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer); clearTimeout(killTimer);
-      if (expired || code !== 0) return reject(Error(`Copilot ${expired ? 'timeout/output limit' : `exit ${code}`}: ${error}`));
-      try {
-        const text = output.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-        resolve(JSON.parse(text));
-      } catch (err) { reject(Error(`Copilot returned invalid JSON: ${err.message}`)); }
-    });
-  });
+export async function callOpenAI(prompt, {
+  model, timeout = 180000, reasoningEffort, apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch,
+} = {}) {
+  if (!apiKey?.trim()) throw Error('Set OPENAI_API_KEY for translation');
+  if (!model?.trim()) throw Error('Set OPENAI_MODEL or --model for translation');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    let response;
+    try {
+      response = await fetchImpl('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model, messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        }),
+        signal: controller.signal,
+      });
+    } catch {
+      throw Error(controller.signal.aborted ? 'OpenAI request timed out' : 'OpenAI request failed (network error)');
+    }
+    if (!response.ok) throw Error(`OpenAI request failed (HTTP ${response.status})`);
+    const reader = response.body?.getReader();
+    if (!reader) throw Error('OpenAI returned an empty response');
+    let raw = '', size = 0;
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 8_000_000) {
+          controller.abort();
+          throw Error('OpenAI response exceeds the size limit');
+        }
+        raw += decoder.decode(value, { stream: true });
+      }
+      raw += decoder.decode();
+    } catch (err) {
+      if (err.message === 'OpenAI response exceeds the size limit') throw err;
+      throw Error(controller.signal.aborted ? 'OpenAI request timed out' : 'OpenAI response could not be read');
+    }
+    let choice;
+    try { choice = JSON.parse(raw).choices?.[0]; }
+    catch { throw Error('OpenAI returned invalid response JSON'); }
+    if (choice?.message?.refusal) throw Error('OpenAI refused the translation request');
+    if (choice?.finish_reason !== 'stop' || typeof choice?.message?.content !== 'string') {
+      throw Error('OpenAI returned an incomplete translation response');
+    }
+    try { return JSON.parse(choice.message.content); }
+    catch { throw Error('OpenAI returned invalid translation JSON'); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function positive(value, name, maximum) {
@@ -56,11 +87,11 @@ function positive(value, name, maximum) {
   return n;
 }
 
-export async function main(args = process.argv.slice(2), { translate = callCopilot } = {}) {
+export async function main(args = process.argv.slice(2), { translate = callOpenAI } = {}) {
   const { values } = parseArgs({ args, options: {
     data: { type: 'string', default: 'site/data' }, store: { type: 'string', default: 'localization' },
     locale: { type: 'string', default: 'all' }, page: { type: 'string', default: 'all' },
-    model: { type: 'string', default: process.env.LOCALIZATION_MODEL },
+    model: { type: 'string', default: process.env.OPENAI_MODEL },
     'reasoning-effort': { type: 'string', default: process.env.LOCALIZATION_REASONING_EFFORT },
     'batch-size': { type: 'string', default: '20' }, entries: { type: 'string', default: '100' },
     minutes: { type: 'string', default: '20' }, workers: { type: 'string', default: '1' },
@@ -83,7 +114,7 @@ export async function main(args = process.argv.slice(2), { translate = callCopil
   }
   const deadline = Date.now() + positive(values.minutes, 'minutes', 300) * 60000;
   if (!values['check-only'] && !values['export-batch'] && !values['import-batch'] && !values.model) {
-    throw Error('Set --model / LOCALIZATION_MODEL to an available hosted frontier model; no implicit model fallback');
+    throw Error('Set --model / OPENAI_MODEL to an available OpenAI model; no implicit model fallback');
   }
   fs.mkdirSync(values.store, { recursive: true });
   const lock = `${path.resolve(values.store)}.lock`;
