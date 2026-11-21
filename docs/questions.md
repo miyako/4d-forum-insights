@@ -94,6 +94,62 @@ fails explicitly and can be retried. Changed source content or prompts invalidat
 uv run -q --project pipeline python -m unittest discover -s tests -p 'test_questions*.py'
 ```
 
+## Private corpus export component
+
+`scripts/questions_export.py` creates a **private, unreviewed candidate**, not a site export or a
+publication approval. It never calls a model or writes to either database. This component has only been
+developed against synthetic fixtures; it has not been used to create or approve a new live export.
+
+Use independently verified, stable, standalone SQLite online backups of the prepared source and isolated
+ratings, with no nonempty `-wal` sidecars. Do not copy just the main file of a WAL database; do not use
+actively changing databases as immutable snapshots. Source and ratings must describe the same preparation.
+The exporter opens each with `mode=ro&immutable=1`, checks integrity, membership, prepared logical source
+hash, per-topic fingerprints, metadata, decision version/model/revision and running attempts. The source
+owner must arrange coherent backup, exclusive control and durable storage separately; this is not a
+distributed lease. In particular this is not an unattended delta workflow.
+
+Supply the **latest approved canonical preview** and its independently verified SHA-256, not an older
+baseline. Existing baseline titles and bodies are copied verbatim for matching current entries, preserving
+approved redactions such as the v3 corrections for 12721 and 15896. New entries use only fresh existing
+English enrichment (`title_en` and `summary_paragraph`); unavailable text is listed, not generated.
+Old baseline strings lack a source-fingerprint binding: reuse does not establish that they remain
+semantically current or privacy-safe against a changed source. A source-linked reviewer must verify them.
+There is deliberately no implicit empty-baseline or first-publication mode.
+
+```sh
+pipeline/.venv/bin/python scripts/questions_export.py \
+  --source /private/standalone-source.db --ratings /private/standalone-ratings.db \
+  --baseline /private/approved-questions-preview.json --baseline-sha256 VERIFIED_SHA256 \
+  --output /private/new-export-directory
+```
+
+The directory must not already exist. It is created with mode 0700, with two mode-0600 files:
+
+- `candidate.json`: `schema_version: "questions-ui-private-preview-v1"`, `version: 1`,
+  `private_preview: true`, `publish_allowed: false`, `generated_at` (UTC ISO timestamp),
+  `snapshot_scope: "processed"`, `processed_count`, `eligible_question_count`, `corpus_total`,
+  `corpus_complete`, and `entries`. `corpus_complete` means all IDs in this **selected source snapshot**
+  have current displayable entries; it does not assert live-forum or published-ID coverage. Entries
+  contain exactly `id`, `title`, `body`, `active`, `lang`, `accepted`, `closed`, `replies`, `answers`,
+  `evidence_warnings`, `decision_model`, and `decision_version`. Nullable metadata stays null.
+  `answers` contains only the decision rubric keys and probability distributions. Eligibility is
+  `has_question.noul >= 0.5`; nonquestions are retained as controls.
+- `audit.json`: `schema_version: "questions-export-private-audit-v1"`, candidate hash, source logical
+  hash, ratings snapshot and baseline hashes, runtime provenance, counts, language counts,
+  `not_current_ids`, `missing_fresh_display_ids`, `baseline_retained_ids`, `baseline_not_exported_ids`,
+  and per-entry source input hash, display field hashes and display origin. Privacy findings contain
+  only topic ID, field and finding kind. The audit always sets `privacy_review_required: true` and
+  `publication_authorized: false`.
+
+The candidate can contain personal or sensitive information even with zero findings: the source-linked
+username/sign-off and pattern scans are **review aids**, not anonymization or clearance. Neither output
+is public-safe by construction. A reviewer must inspect original evidence privately, resolve flags and
+missed leaks, and record clearance bound to the exact candidate hash; translated fields need separate
+source-linked review. No automatic publication is implemented. The current public processed-preview
+validator only supports an incomplete corpus (`corpus_complete: false`, total greater than processed);
+a complete public contract, validation, source-scope reconciliation, localization, publication approval,
+concurrency and durable backup integration remain separate work.
+
 ## Review before expanding
 
 Check whether the extracted question and remaining gap reflect the thread; whether “no” answers, adequate
