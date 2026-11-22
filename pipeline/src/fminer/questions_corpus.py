@@ -100,7 +100,7 @@ def connect(source, results):
     if not source.is_file():
         raise ValueError(f"source database does not exist: {source}")
     results.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(results, timeout=60)
+    con = sqlite3.connect(results, timeout=60, uri=True)
     con.row_factory = sqlite3.Row
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if tables & {"topics", "classifications", "questions_pilot", "kb_entries", "voices_entries"}:

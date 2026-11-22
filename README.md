@@ -157,6 +157,13 @@ hash-keyed localization cache for eventual finalization; it does not resume proc
 
 ## Delta updates
 
+The separate [weekly Questions pipeline](docs/weekly-questions.md) uses the same
+Monday cadence, local Kev/enrichment and embedding caches, and OpenAI redaction
+and translation. Activation and publication stay off until initial EN/FR/JA publication,
+measured privacy readiness and exact-hash reviews pass. The
+[on-device PI proposal/evaluation tool](docs/local-questions-privacy.md) supports
+private existing-candidate review without hosted processing or automatic clearance.
+
 `.github/workflows/delta.yml` runs every Monday at 03:17 UTC (12:17 JST) and on demand (`workflow_dispatch`, with inputs for budgets, skipping the models or only the Tips/Voices steps, and a full re-list). It updates all three views: the main index, `/tips/` and `/voices/`. The steps are:
 
 1. **Pull** the working DB, an encrypted release asset (see below).
