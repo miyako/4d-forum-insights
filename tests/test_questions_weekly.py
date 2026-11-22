@@ -297,6 +297,8 @@ class WeeklyTests(unittest.TestCase):
             weekly.candidate(self.source, self.root, self.cfg)
         private = json.loads((self.root / "publication/candidate.json").read_text())
         public = json.loads((self.root / "publication/public-preview.json").read_text())
+        self.assertEqual(public["snapshot_scope"], "processed")
+        self.assertTrue(public["corpus_complete"])
         self.assertNotIn("domains", private["entries"][0])
         self.assertEqual(public["entries"][0]["domains"], list(weekly.questions.DOMAINS))
         # Shared preflight format is separately reviewed; this fixture is never production clearance.

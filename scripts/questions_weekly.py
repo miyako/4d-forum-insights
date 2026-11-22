@@ -487,7 +487,7 @@ def candidate(source, root, cfg):
     public = {
         "schema_version": "questions-ui-public-complete-v1", "version": 1,
         "private_preview": False, "public_preview": True, "publish_allowed": True,
-        "representative": False, "snapshot_scope": "complete", "corpus_complete": True,
+        "representative": False, "snapshot_scope": "processed", "corpus_complete": True,
         "processed_count": len(entries), "corpus_total": len(entries),
         "eligible_question_count": sum(e["answers"]["has_question"]["noul"] >= 0.5 for e in entries),
         "generated_at": source_state["selected_at"], "source_selected_at": source_state["selected_at"],

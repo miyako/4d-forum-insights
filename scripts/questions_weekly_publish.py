@@ -43,7 +43,7 @@ def publication_review(root, cfg, expected_review_sha256):
     audit = json.loads((root / "publication/audit.json").read_text())
     if ([weekly.complete_public_entry(entry) for entry in private["entries"]] != preview["entries"]
             or audit["identity"] != weekly.identity(cfg)
-            or preview.get("corpus_complete") is not True or preview.get("snapshot_scope") != "complete"
+            or preview.get("corpus_complete") is not True or preview.get("snapshot_scope") != "processed"
             or not preview["entries"] or preview["processed_count"] != len(preview["entries"])
             or preview["corpus_total"] != len(preview["entries"])):
         raise ValueError("publication corpus/provenance mismatch")

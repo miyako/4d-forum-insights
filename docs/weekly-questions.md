@@ -87,7 +87,9 @@ Complete public entries derive `domains` in `questions.DOMAINS` order from
 independent domain probabilities at or above 0.6, including nonquestion
 controls. Private/partial candidate entries keep their existing shape; supplied
 domain arrays are not trusted. Weekly publication preflight checks the derived
-public entries against the private candidate before exact-byte review.
+public entries against the private candidate before exact-byte review. Complete
+snapshots retain `snapshot_scope: "processed"` with `corpus_complete: true`,
+matching the shared UI validator.
 Complete public normalization/Pages support is a dependency of the UI owner;
 the publisher refuses older sample-only dependencies.
 
