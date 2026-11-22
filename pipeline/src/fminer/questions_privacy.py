@@ -2,7 +2,10 @@
 
 import hashlib
 import json
+import os
+from pathlib import Path
 import re
+import stat
 import unicodedata
 from urllib.parse import urlparse
 
@@ -42,6 +45,25 @@ def digest(value):
 
 PROMPT_VERSION = "questions-spans-v1-" + digest([SYSTEM, SCHEMA])[:12]
 RULE_VERSION = "questions-rules-v1-" + digest(PATTERNS)[:12]
+
+
+class DetectionFailure(ValueError):
+    def __init__(self, model_calls):
+        super().__init__("local span detection failed validation; held for private review")
+        self.model_calls = model_calls
+
+
+def private_headers(key_file=None):
+    if key_file is None:
+        return {}
+    path = Path(key_file)
+    info = path.stat()
+    if path.is_symlink() or not path.is_file() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid():
+        raise ValueError("local API key file must be owned, regular, mode 0600")
+    key = path.read_text().strip()
+    if not key or "\n" in key or "\r" in key:
+        raise ValueError("invalid local API key file")
+    return {"Authorization": "Bearer " + key}
 
 
 def findings(text, posts):
@@ -92,7 +114,7 @@ def local_endpoint(url):
     return url.rstrip("/")
 
 
-def detect(text, posts, base_url, model, timeout=120, attempts=2):
+def detect(text, posts, base_url, model, timeout=120, attempts=2, api_key_file=None):
     endpoint = local_endpoint(base_url)
     if not isinstance(text, str) or len(text) > 12000:
         raise ValueError("display text exceeds bounded redaction context")
@@ -100,7 +122,9 @@ def detect(text, posts, base_url, model, timeout=120, attempts=2):
     if sum(map(len, identities)) > 4000:
         raise ValueError("identity context exceeds redaction bound")
     # Never log a response/exception body: it can contain private identity text.
-    with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+    model_calls = 0
+    with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False,
+                      headers=private_headers(api_key_file)) as client:
         for _ in range(attempts):
             try:
                 # Same Gemma schema-channel workaround as enrich.LLM: kwargs must be absent when biasing.
@@ -113,6 +137,7 @@ def detect(text, posts, base_url, model, timeout=120, attempts=2):
                 token = tokens[0] if type(tokens[0]) is int else tokens[0]["id"]
                 if type(token) is not int or token < 0:
                     raise ValueError("invalid schema channel token")
+                model_calls += 1
                 response = client.post(endpoint + "/chat/completions", json={
                     "model": model, "temperature": 0, "max_tokens": 2400,
                     "logit_bias": [[token, False]],
@@ -132,8 +157,8 @@ def detect(text, posts, base_url, model, timeout=120, attempts=2):
                 cleared, spans = apply_spans(text, result)
                 if findings(cleared, posts):
                     raise ValueError("source-linked identifiers remain after redaction")
-                return cleared, {"response_hash": digest(result), "spans": spans,
+                return cleared, {"response_hash": digest(result), "spans": spans, "model_calls": model_calls,
                                  "original_hash": digest(text), "display_hash": digest(cleared)}
             except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
                 continue
-    raise ValueError("local span detection failed validation; held for private review")
+    raise DetectionFailure(model_calls)
