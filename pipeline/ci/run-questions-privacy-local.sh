@@ -22,12 +22,25 @@ with socket.socket() as probe:
 print("Gemma Q8_0 hash and dedicated loopback port verified")
 PY
 MODEL=$(uv run --project pipeline python -c 'import json; print(json.load(open("config/questions-weekly.json"))["redaction_model"])')
-KEY_ARGS=()
+SERVER_ARGS=(-m "$GEMMA_MODEL_FILE" --alias "$MODEL" --host 127.0.0.1 --port "$PORT"
+    -c 16384 -np 1 -t "$THREADS" -fa on --jinja --cache-ram 0 --offline --no-webui --log-disable)
+CLIENT_ARGS=(--base-url "http://127.0.0.1:$PORT/v1")
 if [ -n "${PRIVACY_API_KEY_FILE:-}" ]; then
-    KEY_ARGS=(--api-key-file "$PRIVACY_API_KEY_FILE")
+    uv run --project pipeline python - "$PRIVACY_API_KEY_FILE" <<'PY'
+import sys
+from fminer.questions_privacy import private_headers
+try:
+    private_headers(sys.argv[1])
+except (ValueError, OSError):
+    sys.exit("Invalid local API-key file; require owned regular mode 0600")
+PY
+    SERVER_ARGS+=(--api-key-file "$PRIVACY_API_KEY_FILE")
+    CLIENT_ARGS+=(--api-key-file "$PRIVACY_API_KEY_FILE")
 elif [ "${PRIVACY_ALLOW_UNAUTHENTICATED:-}" != 1 ]; then
     echo "Private local review requires PRIVACY_API_KEY_FILE (owned regular mode 0600)" >&2
     exit 1
+else
+    CLIENT_ARGS+=(--allow-unauthenticated)
 fi
 SERVER_DIR=$(mktemp -d "${TMPDIR:-/tmp}/questions-owned-server.XXXXXX")
 PID=""
@@ -41,9 +54,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-"$LLAMA_SERVER" -m "$GEMMA_MODEL_FILE" --alias "$MODEL" --host 127.0.0.1 --port "$PORT" \
-    -c 16384 -np 1 -t "$THREADS" -fa on --jinja --cache-ram 0 --offline --no-webui \
-    --log-disable "${KEY_ARGS[@]}" > "$SERVER_DIR/server.log" 2>&1 &
+"$LLAMA_SERVER" "${SERVER_ARGS[@]}" > "$SERVER_DIR/server.log" 2>&1 &
 PID=$!
 ready=0
 for _ in $(seq 1 120); do
@@ -62,10 +73,6 @@ PY
     sleep 5
 done
 [ "$ready" = 1 ] || { echo "Owned Gemma readiness timed out" >&2; exit 1; }
-CLIENT_ARGS=("${KEY_ARGS[@]}")
-if [ "${PRIVACY_ALLOW_UNAUTHENTICATED:-}" = 1 ] && [ "${#KEY_ARGS[@]}" = 0 ]; then
-    CLIENT_ARGS=(--allow-unauthenticated)
-fi
 uv run --project pipeline python scripts/questions_local_privacy.py "$@" \
     --model-file "$GEMMA_MODEL_FILE" --llama-server "$LLAMA_SERVER" --server-pid "$PID" \
-    --base-url "http://127.0.0.1:$PORT/v1" "${CLIENT_ARGS[@]}"
+    "${CLIENT_ARGS[@]}"

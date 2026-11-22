@@ -364,13 +364,13 @@ def _designature(text):
     return t
 
 
-def forbidden_names(posts, title=""):
+def forbidden_names(posts, title="", usernames=()):
     """Words that would identify a participant: parts of usernames and sign-off names (lower case)."""
     words = set()
-    for p in posts:
-        u = p["user"]
+    for u in [p["user"] for p in posts] + list(usernames):
         parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", u) + re.split(r"[^A-Za-z]+", u)
         words.update(w.lower() for w in parts if len(w) >= 3)
+    for p in posts:
         words.update(w.lower() for w in _sign_off_names(p["text"]))
     in_title = {w.lower() for w in _WORD.findall(title or "")}
     return {w for w in words if w not in NOT_NAMES and w not in in_title}

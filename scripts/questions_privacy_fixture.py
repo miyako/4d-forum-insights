@@ -54,7 +54,7 @@ def fixture():
                           "posts": [{"user": "AlicePrivate", "text": "Synthetic question only."}],
                           "expected_spans": spans})
     return {"schema": "questions-local-pi-gold-v1", "scope": "synthetic-planted-v1",
-            "independent_heldout": False, "held_out_from_prompt_tuning": True,
+            "independent_heldout": False, "held_out_from_prompt_tuning": False, "used_for_tool_diagnosis": True,
             "label_provenance": "deterministic planted labels authored in the same implementation stream",
             "real_corpus_recall_claim_allowed": False, "cases": cases}
 

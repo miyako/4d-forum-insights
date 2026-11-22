@@ -50,13 +50,17 @@ uv run --project pipeline python scripts/questions_weekly.py backup --source "$R
 uv run --project pipeline python scripts/questions_weekly.py backup --source "$ROOT/display.db" --out "$BACKUP/display.db"
 
 export FMINER_DB="$PWD/$SOURCE"
+mkdir -p build/questions-private-logs
 uv run --project pipeline python scripts/questions_weekly.py capture-delta --source "$SOURCE" --root "$ROOT"
-(cd pipeline && uv run -q fminer delta --sweep-window 300 --sweep-recent-days 45)
+(cd pipeline && timeout 15m uv run -q fminer delta --sweep-window 300 --sweep-recent-days 45) \
+    > build/questions-private-logs/delta.log 2>&1 || {
+        code=$?; echo "::error::Forum delta failed; private diagnostics remain local"; exit "$code";
+    }
 
 mkdir -p build/questions-models
 tag=$(jq -r .llama_tag "$CFG")
 archive="llama-$tag-bin-ubuntu-x64.tar.gz"
-gh release download "$tag" -R ggml-org/llama.cpp --pattern "$archive" --dir build/questions-models
+timeout 5m gh release download "$tag" -R ggml-org/llama.cpp --pattern "$archive" --dir build/questions-models
 printf '%s  %s\n' "$(jq -r .llama_archive_sha256 "$CFG")" "build/questions-models/$archive" | sha256sum -c -
 mkdir build/questions-models/llama
 tar -xzf "build/questions-models/$archive" -C build/questions-models/llama --strip-components=1
@@ -74,12 +78,12 @@ start_server() {
     if curl -fsS --max-time 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
         echo "::error::Questions model port already occupied"; exit 1
     fi
-    curl -fsSL --retry 2 --connect-timeout 30 --max-time 900 \
+    timeout 15m curl -fsSL --retry 2 --connect-timeout 30 --max-time 600 \
         "https://huggingface.co/$repo/resolve/$rev/$file" -o "build/questions-models/$role.gguf"
     printf '%s  %s\n' "$sha" "build/questions-models/$role.gguf" | sha256sum -c -
     "$SERVER" -m "build/questions-models/$role.gguf" --alias "$alias" \
         --host 127.0.0.1 --port "$port" -c 16384 -np 1 -t 4 -fa on --jinja \
-        --cache-ram 0 --log-disable > "build/questions-models/$role.log" 2>&1 &
+        --cache-ram 0 --offline --no-webui --log-disable > "build/questions-models/$role.log" 2>&1 &
     PID=$!
     for _ in $(seq 1 120); do
         kill -0 "$PID" 2>/dev/null || { echo "::error::Local llama-server exited (private log retained locally)"; exit 1; }
@@ -92,7 +96,10 @@ start_server() {
 # Only changed/new raw source text plus resumable delta IDs, never pre-existing corpus backlog.
 start_server redaction 18081
 timeout 25m uv run --project pipeline python scripts/questions_weekly.py enrich-delta \
-    --source "$SOURCE" --root "$ROOT" --base-url http://127.0.0.1:18081/v1 --limit 100 --minutes 20
+    --source "$SOURCE" --root "$ROOT" --base-url http://127.0.0.1:18081/v1 --limit 100 --minutes 20 \
+    > build/questions-private-logs/enrich.log 2>&1 || {
+        code=$?; echo "::error::Local delta enrichment failed; encrypted pending IDs retained"; exit "$code";
+    }
 stop_server
 rm -f build/questions-models/redaction.gguf
 

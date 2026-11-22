@@ -69,6 +69,70 @@ class LocalTests(unittest.TestCase):
             local.proposals(self.source, self.candidate, self.candidate_sha, "a" * 64,
                             self.root / "wrong-source", None, self.cfg, detector=fail)
 
+    def test_source_original_poster_is_passed_without_inventing_posts_and_cannot_leak(self):
+        with closing(local.sqlite3.connect(self.source)) as con:
+            con.execute("UPDATE topics SET op_username='OnlyHiddenOP' WHERE id=1")
+            con.commit()
+        with closing(local._readonly_snapshot(self.source)) as con:
+            self.source_sha = local.corpus.content_hash(con.execute("SELECT * FROM topics ORDER BY id"))
+        doc = json.loads(self.candidate.read_text())
+        doc["entries"][0]["title"] = "OnlyHiddenOP uses ORDA."
+        self.candidate.write_text(json.dumps(doc))
+        self.candidate_sha = local.corpus.file_hash(self.candidate)
+        def detector(text, posts, *args, **kwargs):
+            self.assertEqual(kwargs["op_username"], "OnlyHiddenOP")
+            self.assertNotIn("OnlyHiddenOP", {post["user"] for post in posts})
+            return text, {"spans": []}
+        report = self.propose(detector)
+        self.assertEqual(report["counts"], {"held": 1, "pending": 1})
+
+    def test_persistent_holds_cannot_starve_pending_ids_and_retry_cap_preserves_holds(self):
+        def fail(*args, **kwargs):
+            raise local.privacy.DetectionFailure(2, "exact_text_ambiguous")
+        self.propose(fail)
+        report = self.propose(fail)
+        self.assertEqual(report["counts"], {"held": 2})
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            self.assertEqual(con.execute("SELECT topic_id,attempts FROM records ORDER BY topic_id").fetchall(),
+                             [(1, 1), (2, 1)])
+        self.propose(fail, limit=2)
+        report = self.propose(lambda *args, **kwargs: self.fail("retry cap ignored"), limit=2)
+        self.assertEqual(report["counts"], {"held": 2})
+        self.assertEqual(report["retry_exhausted"], 2)
+        self.assertEqual(report["held_reasons"], {"exact_text_ambiguous": 2})
+        self.assertFalse(report["publication_allowed"])
+
+    def test_held_audit_has_field_hash_reason_but_no_exception_or_model_text(self):
+        def fail(*args, **kwargs):
+            raise ValueError("private model/source text must never be recorded")
+        self.propose(fail)
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            fields, audit, error = con.execute("SELECT fields,audit,error FROM records WHERE topic_id=1").fetchone()
+        self.assertIsNone(fields)
+        self.assertNotIn("private model/source text", audit + error)
+        self.assertEqual(error, "input_or_transport_validation")
+        self.assertEqual(json.loads(audit)["failed_field"], "title")
+
+    def test_interrupted_attempt_is_durable_and_does_not_starve_pending(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.propose(lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            self.assertEqual(con.execute("SELECT outcome,error,attempts FROM records WHERE topic_id=1").fetchone(),
+                             ("held", "attempt_interrupted", 1))
+        self.propose(lambda text, *args, **kwargs: (text, {"spans": []}))
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            self.assertEqual(con.execute("SELECT outcome FROM records WHERE topic_id=2").fetchone()[0],
+                             "review_required")
+
+    def test_missing_source_evidence_is_held_without_model_call(self):
+        with closing(sqlite3.connect(self.source)) as con:
+            con.execute("UPDATE topics SET thread_raw='' WHERE id=1")
+            con.commit()
+        with closing(local._readonly_snapshot(self.source)) as con:
+            self.source_sha = local.corpus.content_hash(con.execute("SELECT * FROM topics ORDER BY id"))
+        report = self.propose(lambda *args, **kwargs: self.fail("missing evidence reached model"))
+        self.assertEqual(report["held_reasons"], {"source_evidence_missing": 1})
+
     def test_synthetic_gold_measurement_counts_misses_overredaction_and_failures(self):
         data = fixture()
         self.assertEqual(len(data["cases"]), 27)

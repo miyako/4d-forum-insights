@@ -102,7 +102,7 @@ def display_connect(path):
 
 
 def fresh_hash(topic, rating, cfg):
-    return privacy.digest([corpus.fingerprint(topic), rating["decision_input_hash"],
+    return privacy.digest([corpus.fingerprint(topic), topic["op_username"], rating["decision_input_hash"],
                            rating["decision_model"], rating["model_revision"],
                            rating["decision_version"], rating["evidence_version"], identity(cfg)])
 
@@ -144,7 +144,8 @@ def proposals(source, root, cfg, endpoint, limit=100, minutes=30, detector=priva
                     if remaining <= 0:
                         raise ValueError("redaction budget exhausted")
                     cleared[field], audit[field] = detector(
-                        text, posts, endpoint, cfg["redaction_model"], timeout=min(120, remaining), attempts=2)
+                        text, posts, endpoint, cfg["redaction_model"], timeout=min(120, remaining), attempts=2,
+                        op_username=topic["op_username"])
                 audit.update(source_hash=corpus.fingerprint(topic), freshness_hash=freshness,
                              identity=identity(cfg), review_required=True, publication_allowed=False)
                 displays.execute(
@@ -195,7 +196,8 @@ def export_cleared(source, root, cfg, out):
             fields, audit = json.loads(row["fields"]), json.loads(row["audit"])
             if (set(fields) != {"title", "body"} or any(not isinstance(v, str) for v in fields.values())
                     or privacy.digest(fields) != row["display_hash"] or privacy.digest(audit) != row["audit_hash"]
-                    or any(privacy.findings(text, split_raw(topic["thread_raw"])) for text in fields.values())):
+                    or any(privacy.findings(text, split_raw(topic["thread_raw"]), topic["op_username"])
+                           for text in fields.values())):
                 raise ValueError("reviewed display failed exact-hash or source-linked guards")
             entries.append({"id": topic["id"], **fields})
             docs.append({"id": topic["id"], "title": fields["title"], "content": fields["body"]})
@@ -304,7 +306,8 @@ def status(source, root, cfg):
                 try:
                     timestamp(review.get("reviewed_at"))
                     if (privacy.digest(fields) != row["display_hash"] or privacy.digest(audit) != row["audit_hash"]
-                            or any(privacy.findings(text, split_raw(topic["thread_raw"])) for text in fields.values())):
+                            or any(privacy.findings(text, split_raw(topic["thread_raw"]), topic["op_username"])
+                                   for text in fields.values())):
                         raise ValueError("reviewed output failed guards")
                     state = "display_cleared"
                 except ValueError:

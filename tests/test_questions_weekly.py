@@ -145,6 +145,13 @@ class WeeklyTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "publication held"):
             weekly.candidate(self.source, self.root, self.cfg)
 
+    def test_original_poster_change_invalidates_only_its_privacy_clearance(self):
+        self.propose()
+        self.approve()
+        with db.connect(self.source) as con:
+            con.execute("UPDATE topics SET op_username='NewSourceOP' WHERE id=2")
+        self.assertEqual([row["id"] for row in self.exported()], [1])
+
     def test_model_and_measured_recall_changes_block_readiness(self):
         weekly.readiness(self.root, self.cfg)
         with self.assertRaises(ValueError):

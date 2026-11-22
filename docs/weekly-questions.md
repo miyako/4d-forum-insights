@@ -33,15 +33,17 @@ no-op updates.
    membership, then classify at most 100 pending records within 45 minutes.
    The frozen final decisions are a required durable seed, not reconstructed
    from public arrays or re-rated for a test.
-4. Gemma proposes structured PI spans in generated English title/body only.
-   Python validates exact Unicode code-point offsets, matched text, kinds,
+4. Gemma proposes exact PI substrings/kinds in generated English title/body only.
+   Python resolves unique exact substrings to Unicode code-point offsets, validates kinds,
    bounds and non-overlap, and applies `[redacted]` deterministically without
    rewriting other characters. Existing source-linked identifier rules,
-   sign-off/name checks and additional NFKC/casefold full username checks run
+   sign-off/name checks and additional NFKC/casefold username/explicit OP checks run
    after redaction. Invalid, uncertain, incomplete, oversized or residual-PI
    responses hold the row and invalidate its previous current output. Two
    bounded attempts; no hosted fallback. Excess context is held, never silently
-   truncated.
+   truncated. Ambiguous repeated substrings are held, not guessed; model numeric
+   offsets are not blindly corrected. OP metadata changes invalidate PI freshness
+   even when Questions decision evidence is unchanged.
 5. Reuse successful display proposals only with exact source/decision/model/
    prompt/rule freshness. An independent source-linked exact-hash display review
    is required before translation. Changed source or model/prompt/rules makes

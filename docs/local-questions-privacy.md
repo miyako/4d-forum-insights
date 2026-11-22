@@ -62,14 +62,24 @@ An advisory single-writer lock protects each result set.
 candidate/source/selection/model/prompt/rules/runtime identity, then records exact
 source input and field hashes, structured span audit, corrected display hashes,
 bounded attempts and `pending`, `held` or `review_required` outcome. It refuses
-changed inputs/scope/model in the same results directory. Retries skip successful
-current proposals; unfinished/error records resume in the same required scope.
+changed inputs/scope/model in the same results directory. Pending records get
+their first attempt before held retries. `--max-record-attempts` defaults to two
+record attempts across invocations (reserved durably before inference, so an
+interrupted run consumes an attempt); exhausted records remain held for local
+review, never cleared. Successful current proposals are skipped. `progress.json`
+includes held-reason and exhausted-retry counts. Held audits contain only fixed
+error categories, failed field, input hashes and call counts, not response/source
+text. Historical generic errors remain unknown until an eligible retry.
 No output overwrites the original candidate or any source/ratings DB.
 
-Gemma sees only each display field plus source-linked identity hints through
-authenticated loopback HTTP. Python validates exact Unicode offsets/matched strings,
+Gemma sees each display field plus source-linked identity hints, including explicit
+`topics.op_username` even when absent from parsed authors, through authenticated
+loopback HTTP. No post content is invented. Gemma proposes `{text,kind}`; Python
+resolves unique exact substrings to Unicode offsets and validates matched strings,
 non-overlap and schema, then deterministically applies spans. Existing source-linked
-rules plus NFKC username checks hold residual identifiers. Context overflow,
+rules plus conservative NFKC username/OP checks hold residual identifiers. Matching
+is never fuzzy, case-folded or width-normalized; absent, repeated or overlapping
+proposed substrings hold instead of guessing. Context overflow,
 uncertainty, malformed/unfinished responses and missing identity evidence are held,
 not truncated or silently accepted. Two attempts per field; bounded request timeout.
 
@@ -86,7 +96,7 @@ Create the deterministic 27-case EN/FR/JA planted-PI challenge fixture outside t
 
 ```sh
 uv run --project pipeline python scripts/questions_privacy_fixture.py --out /private/gold.json
-# Keep the printed SHA and fixtures separate from prompt tuning.
+# Preserve the printed SHA and this synthetic challenge result.
 bash pipeline/ci/run-questions-privacy-local.sh evaluate \
   --fixture /private/gold.json --fixture-sha256 VERIFIED_FIXTURE_SHA \
   --out /private/local-pi-evaluation --limit 30 --minutes 20
@@ -99,8 +109,9 @@ The gold format is `questions-local-pi-gold-v1`, with `independent_heldout:false
 and cases `{id,lang,text,posts,expected_spans}`. Each span has exact
 `{start,end,text,kind}`. Real held-out inputs must be independently labeled
 on device. The generated fixture was authored in the same implementation stream
-as the detector; separation from prompt tuning does **not** establish independent
-authoring/labeling. The measurement explicitly records input assertions but keeps
+as the detector and used for tool/protocol diagnosis, not independently held out.
+Separation from tuning does **not** establish independent authoring/labeling.
+The measurement explicitly records input assertions but keeps
 `independent_heldout:false` / `independence_verified:false`: a supplied boolean is
 not proof. Prior detector-selected AI findings/corrections are biased challenge
 cases, not independent corpus-recall labels.
@@ -108,7 +119,8 @@ cases, not independent corpus-recall labels.
 The evaluation writes private per-case/per-language/per-span-kind identifier counts,
 detected/missed counts, failed/held/not-run cases, non-PI characters redacted,
 elapsed seconds, model-call counts and exact dataset/runtime/model/prompt/rule
-identity. Failed/uncertain outputs count conservatively as missed gold labels.
+identity and held reason categories. Failed/uncertain outputs count conservatively
+as missed gold labels; these include protocol failures, not just valid detection misses.
 Non-PI characters removed and held technical negatives require technical-meaning
 review; zero collateral characters alone does not establish semantic fidelity.
 Existing conservative rules hold any remaining URL, including a public product

@@ -94,7 +94,7 @@ def backup_inputs(source, candidate, directory):
 
 def proposals(source, candidate_path, candidate_sha, source_content_sha, results, ids, cfg,
               minutes=20, limit=30, detector=privacy.detect, endpoint="http://127.0.0.1:18081/v1", runtime=None,
-              api_key_file=None):
+              api_key_file=None, max_record_attempts=2):
     candidate = read_verified(candidate_path, candidate_sha)
     if candidate.get("private_preview") is not True or candidate.get("publish_allowed") is not False:
         raise ValueError("existing candidate must remain private and review-required")
@@ -109,7 +109,7 @@ def proposals(source, candidate_path, candidate_sha, source_content_sha, results
     if not selected or any(type(topic_id) is not int for topic_id in selected) \
             or len(selected) != len(set(selected)) or set(selected) - required.keys():
         raise ValueError("required ID scope is empty/duplicate/outside candidate")
-    if limit < 1 or minutes <= 0:
+    if limit < 1 or minutes <= 0 or type(max_record_attempts) is not int or max_record_attempts < 1:
         raise ValueError("positive local execution bounds required")
     results = Path(results)
     results.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -141,40 +141,63 @@ def proposals(source, candidate_path, candidate_sha, source_content_sha, results
         con.commit() # One durable result slot per required ID exists before any inference.
         done = 0
         for topic_id, input_hash, outcome in con.execute(
-                "SELECT topic_id,input_hash,outcome FROM records ORDER BY topic_id").fetchall():
-            if outcome == "review_required":
-                continue
+                """SELECT topic_id,input_hash,outcome FROM records
+                   WHERE outcome='pending' OR (outcome='held' AND attempts<?)
+                   ORDER BY CASE outcome WHEN 'pending' THEN 0 ELSE 1 END, attempts, topic_id""",
+                (max_record_attempts,)).fetchall():
             if done >= limit or time.monotonic() >= deadline:
                 break
             done += 1
             fields, audit = {}, {}
+            failed_field = "source"
+            held_audit = {"input_hash": input_hash, "reason": "attempt_interrupted",
+                          "field_input_hashes": {field: privacy.digest(required[topic_id][field])
+                                                 for field in ("title", "body")},
+                          "publication_allowed": False}
+            con.execute("""UPDATE records SET outcome='held',fields=NULL,audit=?,
+                           error='attempt_interrupted',attempts=attempts+1 WHERE topic_id=?""",
+                        (json.dumps(held_audit), topic_id))
+            con.commit()
             try:
                 posts = split_raw(topics[topic_id]["thread_raw"] or "")
                 if not posts or posts[0]["n"] != 1:
-                    raise ValueError("source identity evidence is missing")
+                    raise privacy.ProposalError("source_evidence_missing")
                 for field in ("title", "body"):
+                    failed_field = field
                     text = required[topic_id][field]
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise ValueError("bounded local budget exhausted")
+                        raise privacy.ProposalError("context_or_time_budget")
                     fields[field], audit[field] = detector(
                         text, posts, endpoint, cfg["redaction_model"], timeout=min(120, remaining), attempts=2,
-                        api_key_file=api_key_file)
-                    if privacy.findings(fields[field], posts):
-                        raise ValueError("source-linked identifiers remain")
+                        api_key_file=api_key_file, op_username=topics[topic_id]["op_username"])
+                    if privacy.findings(fields[field], posts, topics[topic_id]["op_username"]):
+                        raise privacy.ProposalError("residual_identifiers")
                 audit.update(input_hash=input_hash, original_fields_sha256=privacy.digest(
                     {field: required[topic_id][field] for field in ("title", "body")}),
                     corrected_fields_sha256=privacy.digest(fields), publication_allowed=False)
-                con.execute("""UPDATE records SET outcome='review_required',fields=?,audit=?,error=NULL,
-                               attempts=attempts+1 WHERE topic_id=?""",
+                con.execute("""UPDATE records SET outcome='review_required',fields=?,audit=?,error=NULL
+                               WHERE topic_id=?""",
                             (json.dumps(fields, ensure_ascii=False), json.dumps(audit, ensure_ascii=False), topic_id))
-            except (ValueError, httpx.HTTPError):
-                con.execute("""UPDATE records SET outcome='held',fields=NULL,audit=NULL,
-                               error='local response/source validation failed',attempts=attempts+1 WHERE topic_id=?""",
-                            (topic_id,))
+            except (ValueError, httpx.HTTPError) as error:
+                reason = getattr(error, "reason", "input_or_transport_validation")
+                held_audit.update({"failed_field": failed_field, "reason": reason,
+                              "original_fields_sha256": privacy.digest(
+                                  {field: required[topic_id][field] for field in ("title", "body")}),
+                              "model_calls": sum(item.get("model_calls", 0) for item in audit.values())
+                                             + getattr(error, "model_calls", 0),
+                              "publication_allowed": False})
+                con.execute("""UPDATE records SET outcome='held',fields=NULL,audit=?,error=?
+                               WHERE topic_id=?""",
+                            (json.dumps(held_audit), reason, topic_id))
             con.commit()
         counts = dict(con.execute("SELECT outcome,COUNT(*) FROM records GROUP BY outcome"))
+        held_reasons = dict(con.execute("SELECT error,COUNT(*) FROM records WHERE outcome='held' GROUP BY error"))
+        exhausted = con.execute("SELECT COUNT(*) FROM records WHERE outcome='held' AND attempts>=?",
+                                (max_record_attempts,)).fetchone()[0]
         report = {"version": 1, "identity": identity, "required": len(selected), "counts": counts,
+                  "held_reasons": held_reasons, "max_record_attempts": max_record_attempts,
+                  "retry_exhausted": exhausted,
                   "proposal_unresolved": counts.get("pending", 0) + counts.get("held", 0),
                   "unresolved": len(selected),
                   "privacy_cleared": 0, "publication_allowed": False}
@@ -203,7 +226,7 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
         seen.add(case["id"])
         text, gold = case["text"], case["expected_spans"]
         privacy.apply_spans(text, {"uncertain": False, "spans": gold}) # Validate gold exact offsets too.
-        expected, removed, held, collateral = len(gold), 0, False, 0
+        expected, removed, held, collateral, reason = len(gold), 0, False, 0, None
         began = time.monotonic()
         detected = []
         not_run = attempted >= limit or began >= deadline
@@ -212,7 +235,8 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
                 raise ValueError("bounded evaluation budget exhausted")
             attempted += 1
             _, audit = detector(text, case["posts"], endpoint, cfg["redaction_model"],
-                                timeout=min(120, deadline - began), attempts=2, api_key_file=api_key_file)
+                                timeout=min(120, deadline - began), attempts=2, api_key_file=api_key_file,
+                                op_username=case.get("op_username"))
             calls += audit.get("model_calls", 1)
             spans = audit["spans"]
             removed_indices = {i for span in spans for i in range(span["start"], span["end"])}
@@ -223,6 +247,7 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
         except (ValueError, httpx.HTTPError) as error:
             calls += getattr(error, "model_calls", 0)
             held = True # Conservative: failed/uncertain proposals count as missed labels, not recalled PI.
+            reason = "not_run" if not_run else getattr(error, "reason", "input_or_transport_validation")
         elapsed += time.monotonic() - began
         for target, found in zip(gold, detected or [False] * len(gold)):
             counts = kinds.setdefault(case["lang"] + "/" + target["kind"], Counter())
@@ -230,8 +255,11 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
         counts = languages.setdefault(case["lang"], Counter())
         counts.update(cases=1, identifiers=expected, detected=removed, missed=expected - removed,
                       held_cases=int(held), not_run=int(not_run), non_pi_characters_redacted=collateral)
+        if reason:
+            counts["held_reason_" + reason] += 1
         outcomes.append({"id": case["id"], "lang": case["lang"], "expected": expected,
                          "detected": removed, "held": held, "not_run": not_run,
+                         "held_reason": reason,
                          "non_pi_characters_redacted": collateral, "seconds": time.monotonic() - began})
     report = {"schema": "questions-local-pi-measurement-v1", "dataset_sha256": fixture_sha,
               "identity": weekly.identity(cfg), "runtime": runtime, "independent_heldout": False,
@@ -272,6 +300,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--minutes", type=float, default=20)
+    parser.add_argument("--max-record-attempts", type=int, default=2,
+                        help="per-record invocation cap; exhausted records remain held, never cleared")
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--fixture-sha256")
     args = parser.parse_args()
@@ -292,7 +322,7 @@ def main():
             ids = json.loads(args.ids.read_text()) if args.ids else None
             proposals(source, args.candidate, args.candidate_sha256, args.source_content_sha256,
                       args.out, ids, cfg, args.minutes, args.limit, endpoint=args.base_url, runtime=runtime,
-                      api_key_file=args.api_key_file)
+                      api_key_file=args.api_key_file, max_record_attempts=args.max_record_attempts)
     else:
         evaluate(args.fixture, args.fixture_sha256, args.out, cfg, args.base_url, runtime,
                  api_key_file=args.api_key_file, minutes=args.minutes, limit=args.limit)

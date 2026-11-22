@@ -82,7 +82,7 @@ def publish(root, cfg, review_sha256):
                     texts = [rows[topic["id"]]["title"], rows[topic["id"]]["body"]]
                     for locale in ("fr", "ja"):
                         texts.extend(overlays[locale]["entries"][str(topic["id"])]["fields"].values())
-                    if any(weekly.privacy.findings(text, posts) for text in texts):
+                    if any(weekly.privacy.findings(text, posts, topic["op_username"]) for text in texts):
                         raise ValueError("source-linked EN/FR/JA identifier guards block publication")
             subprocess.run(["node", "scripts/localize.mjs", "--page", "questions", "--check-only",
                             "--require-complete", "--data", str(root / "embedding"), "--store", str(root / "portable-locales"),
