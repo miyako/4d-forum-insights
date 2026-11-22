@@ -444,7 +444,8 @@ def public_questions_overlays(documents, questions, require_complete=False):
         documents[name] = {"version": 1, "locale": locale, "page": "questions", "entries": entries}
 
 
-def publish_localization(gh, release, store, directory, assets, questions=None, require_questions=False):
+def publish_localization(gh, release, store, directory, assets, questions=None, require_questions=False,
+                         reviewed_questions=None):
     if "site-data.tar.gz" not in assets:
         raise ValueError("Publish English site data before localization")
     gh.release("download", release, "--pattern", "site-data.tar.gz", "--dir", str(directory))
@@ -481,24 +482,66 @@ def publish_localization(gh, release, store, directory, assets, questions=None, 
     if questions is not None:
         public_questions_overlays(documents, questions, require_complete=require_questions
                                   or questions.get("snapshot_scope") == "processed")
+    if reviewed_questions is not None:
+        for locale, content in reviewed_questions.items():
+            name = f"data/locales/{locale}/questions.json"
+            if documents.get(name) != json.loads(content):
+                raise ValueError(f"Published {locale} Questions overlay differs from reviewed artifact")
     output = directory / "localization.tar.gz"
     with tarfile.open(output, "w:gz") as tar:
         for name, document in sorted(documents.items()):
             path = directory / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(document, ensure_ascii=False) + "\n")
+            locale = Path(name).parts[-2]
+            if reviewed_questions is not None and name == f"data/locales/{locale}/questions.json":
+                path.write_bytes(reviewed_questions[locale])
+            else:
+                path.write_text(json.dumps(document, ensure_ascii=False) + "\n")
             tar.add(path, arcname=name)
     gh.release("upload", release, str(output), "--clobber")
 
 
-def publish_questions_preview(gh, release, source, store, directory, assets, expected_preview_hash=None):
+def publish_questions_preview(gh, release, source, store, directory, assets, expected_preview_hash=None,
+                              allow_complete=False, review=None):
     questions = read_public_questions(source)
+    if questions.get("corpus_complete") is True and not allow_complete:
+        raise ValueError("Complete Questions snapshot requires explicit opt-in")
+    reviewed_questions = None
+    preview_bytes = None
+    if questions.get("corpus_complete") is True:
+        if review is None:
+            raise ValueError("Complete Questions snapshot requires a bound publication review")
+        # Snapshot all reviewed inputs before preflight and publish only those same bytes.
+        staged = directory / "review"
+        staged.mkdir(mode=0o700)
+        paths = {name: staged / f"{name}.json" for name in ("candidate", "audit", "preview", "fr", "ja", "clearance")}
+        inputs = {**review, "preview": source, "fr": store / "fr/questions.json", "ja": store / "ja/questions.json"}
+        for name, path in paths.items():
+            path.write_bytes(Path(inputs[name]).read_bytes())
+            path.chmod(0o600)
+        result = json.loads(run("node", "scripts/questions_publication_preflight.mjs",
+                                "--candidate", str(paths["candidate"]), "--audit", str(paths["audit"]),
+                                "--preview", str(paths["preview"]), "--fr", str(paths["fr"]), "--ja", str(paths["ja"]),
+                                "--clearance", str(paths["clearance"]),
+                                "--clearance-sha256", review["clearance_sha256"]).stdout)
+        if result["expected_current_preview_sha256"] != expected_preview_hash:
+            raise ValueError("Expected live preview hash differs from publication review")
+        preview_bytes = paths["preview"].read_bytes()
+        if json.loads(preview_bytes) != questions:
+            raise ValueError("Complete preview must already be public-validator normalized")
+        reviewed_questions = {locale: paths[locale].read_bytes() for locale in ("fr", "ja")}
+        for locale in ("fr", "ja"):
+            (staged / locale).mkdir()
+            (staged / locale / "questions.json").write_bytes(reviewed_questions[locale])
+        store = staged
     if "questions-preview.json" in assets:
         current_directory = directory / "current-questions"
         current_directory.mkdir()
         gh.release("download", release, "--pattern", "questions-preview.json", "--dir", str(current_directory))
         current_path = current_directory / "questions-preview.json"
         current = read_public_questions(current_path)
+        if current.get("corpus_complete") is True and questions.get("corpus_complete") is not True:
+            raise ValueError("Refusing to replace a complete Questions snapshot with an incomplete preview")
         if expected_preview_hash is not None and hashlib.sha256(current_path.read_bytes()).hexdigest() != expected_preview_hash:
             raise ValueError("Published Questions preview changed; refresh and review before replacing it")
         if current.get("processed_count", 0) > questions.get("processed_count", 0):
@@ -506,9 +549,13 @@ def publish_questions_preview(gh, release, source, store, directory, assets, exp
     elif expected_preview_hash not in (None, "absent"):
         raise ValueError("Expected published Questions preview is missing")
     # Upload complete locales first: the old preview remains usable until the source asset switches.
-    publish_localization(gh, release, store, directory, assets, questions=questions, require_questions=True)
+    publish_localization(gh, release, store, directory, assets, questions=questions, require_questions=True,
+                         reviewed_questions=reviewed_questions)
     output = directory / "questions-preview.json"
-    output.write_text(json.dumps(questions, ensure_ascii=False) + "\n")
+    if preview_bytes is not None:
+        output.write_bytes(preview_bytes)
+    else:
+        output.write_text(json.dumps(questions, ensure_ascii=False) + "\n")
     gh.release("upload", release, str(output), "--clobber")
 
 
@@ -554,6 +601,12 @@ def main():
     child.add_argument("--store", type=Path, required=True)
     child.add_argument("--expected-preview-sha256", required=True,
                        help="reviewed base asset SHA256, or 'absent' for initial publication")
+    child.add_argument("--allow-complete", action="store_true",
+                       help="explicitly allow a separately reviewed complete snapshot")
+    child.add_argument("--review-candidate", type=Path)
+    child.add_argument("--review-audit", type=Path)
+    child.add_argument("--review-clearance", type=Path)
+    child.add_argument("--review-clearance-sha256")
     child.add_argument("--release", default="data")
     child.add_argument("--deploy", action="store_true")
     child = sub.add_parser("with-lock")
@@ -578,6 +631,10 @@ def main():
     if args.command == "seal-english-candidate":
         seal_english_candidate(args.source, args.release, args.provenance)
         return
+    if args.command == "publish-questions-preview" and args.allow_complete:
+        config = json.loads(Path("config/questions-preview.json").read_text())
+        if config.get("complete_enabled") is not True:
+            raise ValueError("Complete Questions rollout is disabled in config/questions-preview.json")
     gh = GitHub(args.repo)
     if args.command == "recover-lock":
         if gh.lock_owner() != args.expected_sha:
@@ -609,8 +666,15 @@ def main():
                     notify_localization(gh)
             elif args.command == "publish-questions-preview":
                 assets = ensure_release(gh, args.release)
+                review = None
+                if args.allow_complete:
+                    if not all((args.review_candidate, args.review_audit, args.review_clearance,
+                                args.review_clearance_sha256)):
+                        raise ValueError("Complete Questions publication requires all review arguments")
+                    review = {"candidate": args.review_candidate, "audit": args.review_audit,
+                              "clearance": args.review_clearance, "clearance_sha256": args.review_clearance_sha256}
                 publish_questions_preview(gh, args.release, args.source, args.store, directory, assets,
-                                          args.expected_preview_sha256)
+                                          args.expected_preview_sha256, args.allow_complete, review)
             else:
                 assets = ensure_release(gh, args.release)
                 publish_localization(gh, args.release, args.store or args.source / "locales",
