@@ -447,6 +447,14 @@ def status(source, root, cfg):
     return report
 
 
+def complete_public_entry(entry):
+    """Derive complete-snapshot domain labels from the independent probabilities."""
+    answers = entry["answers"]
+    questions.validate_answers(answers)
+    return {**entry, "domains": [domain for domain in questions.DOMAINS
+                                 if answers["domain_" + domain]["noul"] >= 0.6]}
+
+
 def candidate(source, root, cfg):
     """Construct a private publication-review bundle; never infer publication permission."""
     root = Path(root)
@@ -483,10 +491,11 @@ def candidate(source, root, cfg):
         "processed_count": len(entries), "corpus_total": len(entries),
         "eligible_question_count": sum(e["answers"]["has_question"]["noul"] >= 0.5 for e in entries),
         "generated_at": source_state["selected_at"], "source_selected_at": source_state["selected_at"],
-        "entries": entries,
+        "entries": [complete_public_entry(entry) for entry in entries],
     }
     private = {**public, "schema_version": "questions-ui-private-preview-v1", "snapshot_scope": "processed",
-               "private_preview": True, "public_preview": False, "publish_allowed": False}
+               "private_preview": True, "public_preview": False, "publish_allowed": False,
+               "entries": entries}
     audit = {"schema_version": "questions-export-private-audit-v1", "identity": identity(cfg),
              "source_content_sha256": source_state["source_content_sha256"],
              "source_selected_at": source_state["selected_at"], "display_bindings": bindings,

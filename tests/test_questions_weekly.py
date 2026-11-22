@@ -265,6 +265,22 @@ class WeeklyTests(unittest.TestCase):
                 self.assertEqual([row["id"] for row in pool.call_args.args[1]], [1])
             with self.assertRaises(ValueError):
                 enrich.run(con, "", "", topic_ids=[False])
+
+    def test_complete_domain_labels_are_probability_based_including_nonquestions(self):
+        labels = answers()
+        labels["has_question"]["noul"] = 0.1
+        for domain in weekly.questions.DOMAINS:
+            labels["domain_" + domain]["noul"] = 0.0
+        labels["domain_database"]["noul"] = 0.9
+        labels["domain_coding"]["noul"] = 0.6
+        labels["domain_interface"]["noul"] = 0.599
+        entry = {"id": 1, "answers": labels, "domains": ["interface"]}
+        self.assertEqual(weekly.complete_public_entry(entry)["domains"], ["coding", "database"])
+        self.assertEqual(entry["domains"], ["interface"])
+        labels["domain_coding"]["noul"] = 0
+        labels["domain_database"]["noul"] = 0
+        self.assertEqual(weekly.complete_public_entry(entry)["domains"], [])
+
     def test_publication_exact_locale_hash_and_default_off_gate(self):
         self.propose()
         self.approve()
@@ -279,6 +295,10 @@ class WeeklyTests(unittest.TestCase):
             (directory / "questions.json").write_text(json.dumps(document))
         with redirect_stdout(io.StringIO()):
             weekly.candidate(self.source, self.root, self.cfg)
+        private = json.loads((self.root / "publication/candidate.json").read_text())
+        public = json.loads((self.root / "publication/public-preview.json").read_text())
+        self.assertNotIn("domains", private["entries"][0])
+        self.assertEqual(public["entries"][0]["domains"], list(weekly.questions.DOMAINS))
         # Shared preflight format is separately reviewed; this fixture is never production clearance.
         (self.root / "ui-publication-review.json").write_text("{}")
         review = {"schema": "questions-weekly-publication-review-v1", "identity": weekly.identity(self.cfg),
@@ -294,6 +314,18 @@ class WeeklyTests(unittest.TestCase):
         path.write_text(json.dumps(review))
         review_hash = corpus.file_hash(path)
         publishing.publication_review(self.root, self.cfg, review_hash)
+        preview_path = self.root / "publication/public-preview.json"
+        original_preview = preview_path.read_bytes()
+        public["entries"][0]["domains"] = []
+        preview_path.write_text(json.dumps(public))
+        review["sha256"]["publication/public-preview.json"] = corpus.file_hash(preview_path)
+        path.write_text(json.dumps(review))
+        with self.assertRaisesRegex(ValueError, "corpus/provenance mismatch"):
+            publishing.publication_review(self.root, self.cfg, corpus.file_hash(path))
+        preview_path.write_bytes(original_preview)
+        review["sha256"]["publication/public-preview.json"] = corpus.file_hash(preview_path)
+        path.write_text(json.dumps(review))
+        review_hash = corpus.file_hash(path)
         with patch.dict("os.environ", {"PUBLICATION_ENABLED": "false"}), \
                 patch.object(publishing.publisher, "GitHub", side_effect=AssertionError("no network")), \
                 self.assertRaisesRegex(ValueError, "OFF"):

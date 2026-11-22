@@ -41,7 +41,8 @@ def publication_review(root, cfg, expected_review_sha256):
     preview = json.loads((root / "publication/public-preview.json").read_text())
     private = json.loads((root / "publication/candidate.json").read_text())
     audit = json.loads((root / "publication/audit.json").read_text())
-    if (private["entries"] != preview["entries"] or audit["identity"] != weekly.identity(cfg)
+    if ([weekly.complete_public_entry(entry) for entry in private["entries"]] != preview["entries"]
+            or audit["identity"] != weekly.identity(cfg)
             or preview.get("corpus_complete") is not True or preview.get("snapshot_scope") != "complete"
             or not preview["entries"] or preview["processed_count"] != len(preview["entries"])
             or preview["corpus_total"] != len(preview["entries"])):
