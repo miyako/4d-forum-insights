@@ -2,6 +2,7 @@
 
 from contextlib import closing, redirect_stdout
 import io
+import hashlib
 import json
 from pathlib import Path
 import shlex
@@ -44,16 +45,27 @@ class LocalTests(unittest.TestCase):
 
     def test_all_required_slots_persist_before_model_and_resume_without_clearance(self):
         def detector(text, *args, **kwargs):
+            with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM field_results").fetchone()[0], 4)
             return text.replace("AlicePrivate", "[redacted]"), {"spans": []}
         report = self.propose(detector)
         self.assertEqual(report["required"], 2)
         self.assertEqual(report["counts"], {"pending": 1, "review_required": 1})
         self.assertEqual(report["privacy_cleared"], 0)
         self.assertEqual(report["unresolved"], 2)
+        self.assertEqual(report["field_counts"], {
+            "title": {"pending": 1, "review_required": 1}, "body": {"pending": 1, "review_required": 1}})
         report = self.propose(detector)
         self.assertEqual(report["counts"], {"review_required": 2})
         self.assertEqual(report["proposal_unresolved"], 0)
         self.assertFalse(report["publication_allowed"])
+        self.assertEqual(report["fields_completed"], 4)
+        coverage = json.loads((self.root / "local-results/field-coverage.json").read_text())
+        self.assertEqual(local.corpus.file_hash(self.root / "local-results/field-coverage.json"),
+                         report["field_coverage_sha256"])
+        self.assertEqual(len({(row["topic_id"], row["field"]) for row in coverage["fields"]}), 4)
+        title = next(row for row in coverage["fields"] if row["topic_id"] == 1 and row["field"] == "title")
+        self.assertEqual(title["text_sha256"], hashlib.sha256(b"AlicePrivate uses ORDA.").hexdigest())
         with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
             self.assertEqual(con.execute("SELECT COUNT(DISTINCT topic_id) FROM records").fetchone()[0], 2)
 
@@ -121,8 +133,76 @@ class LocalTests(unittest.TestCase):
                              ("held", "attempt_interrupted", 1))
         self.propose(lambda text, *args, **kwargs: (text, {"spans": []}))
         with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
-            self.assertEqual(con.execute("SELECT outcome FROM records WHERE topic_id=2").fetchone()[0],
+            self.assertEqual(con.execute("SELECT outcome FROM field_results WHERE topic_id=1 AND field='body'").fetchone()[0],
                              "review_required")
+        self.propose(lambda text, *args, **kwargs: (text, {"spans": []}))
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            self.assertEqual(con.execute("SELECT outcome FROM records WHERE topic_id=2").fetchone()[0], "review_required")
+
+    def test_title_hold_does_not_skip_body_and_successful_body_is_reused(self):
+        calls = []
+        def detector(text, *args, **kwargs):
+            calls.append(text)
+            if text == "AlicePrivate uses ORDA.":
+                raise local.privacy.DetectionFailure(2, "uncertain")
+            return text, {"spans": [], "model_calls": 1}
+        report = self.propose(detector)
+        self.assertEqual(calls, ["AlicePrivate uses ORDA.", "4D v20 uses ORDA."])
+        self.assertEqual(report["field_counts"]["title"], {"held": 1, "pending": 1})
+        self.assertEqual(report["field_counts"]["body"], {"pending": 1, "review_required": 1})
+        self.assertEqual(report["fields_completed"], 2)
+        self.assertEqual(report["fields_model_attempted"], 2)
+        self.assertEqual(report["counts"], {"held": 1, "pending": 1})
+        with closing(sqlite3.connect(self.root / "local-results/records.db")) as con:
+            self.assertIsNone(con.execute("SELECT fields FROM records WHERE topic_id=1").fetchone()[0])
+        self.propose(detector)  # Later pending topic gets both first attempts.
+        calls.clear()
+        report = self.propose(detector)  # Held title retries, successful body does not.
+        self.assertEqual(calls, ["AlicePrivate uses ORDA."])
+        self.assertEqual(report["field_retry_exhausted"], 1)
+        self.assertFalse(report["publication_allowed"])
+
+    def test_budget_exhaustion_leaves_body_pending_then_schedules_it_before_title_retry(self):
+        clock = [0]
+        def exhausted(*args, **kwargs):
+            clock[0] = 1201
+            raise local.privacy.DetectionFailure(1, "uncertain")
+        with patch.object(local.time, "monotonic", side_effect=lambda: clock[0]):
+            report = self.propose(exhausted)
+        self.assertEqual(report["field_counts"]["body"], {"pending": 2})
+        self.assertEqual(report["fields_completed"], 1)
+        calls = []
+        def detector(text, *args, **kwargs):
+            calls.append(text)
+            return text.replace("AlicePrivate", "[redacted]"), {"spans": []}
+        self.propose(detector)
+        self.assertEqual(calls[0], "4D v20 uses ORDA.")
+
+    def test_legacy_topic_results_are_not_promoted_to_field_coverage(self):
+        out = self.root / "local-results"
+        out.mkdir()
+        with closing(sqlite3.connect(out / "records.db")) as con:
+            con.execute("CREATE TABLE state(key TEXT PRIMARY KEY,value TEXT)")
+            con.execute("INSERT INTO state VALUES ('identity','{}')")
+            con.commit()
+        with self.assertRaisesRegex(ValueError, "coverage changed"):
+            self.propose(lambda *args, **kwargs: self.fail("legacy result reached model"))
+        with closing(sqlite3.connect(out / "records.db")) as con:
+            self.assertFalse(con.execute("SELECT name FROM sqlite_master WHERE name='field_results'").fetchall())
+
+    def test_missing_or_wrong_hash_field_slots_are_not_silently_reconstructed(self):
+        self.propose(lambda text, *args, **kwargs: (text.replace("AlicePrivate", "[redacted]"), {"spans": []}))
+        path = self.root / "local-results/records.db"
+        with closing(sqlite3.connect(path)) as con:
+            con.execute("UPDATE field_results SET input_hash='wrong' WHERE topic_id=1 AND field='body'")
+            con.commit()
+        with self.assertRaisesRegex(ValueError, "field input hash differs"):
+            self.propose(lambda *args, **kwargs: self.fail("wrong hash reached model"))
+        with closing(sqlite3.connect(path)) as con:
+            con.execute("DELETE FROM field_results WHERE topic_id=1 AND field='body'")
+            con.commit()
+        with self.assertRaisesRegex(ValueError, "slots are missing"):
+            self.propose(lambda *args, **kwargs: self.fail("missing slot reached model"))
 
     def test_missing_source_evidence_is_held_without_model_call(self):
         with closing(sqlite3.connect(self.source)) as con:

@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS records(
  topic_id INTEGER PRIMARY KEY,input_hash TEXT NOT NULL,outcome TEXT NOT NULL,
  fields TEXT,audit TEXT,error TEXT,attempts INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS field_results(
+ topic_id INTEGER NOT NULL,field TEXT NOT NULL CHECK(field IN ('title','body')),
+ input_hash TEXT NOT NULL,text_sha256 TEXT NOT NULL,
+ outcome TEXT NOT NULL CHECK(outcome IN ('pending','held','review_required')),
+ output TEXT,audit TEXT,error TEXT,attempts INTEGER NOT NULL DEFAULT 0,
+ completed_attempts INTEGER NOT NULL DEFAULT 0,model_calls INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(topic_id,field)
+);
 """
 
 
@@ -92,9 +100,36 @@ def backup_inputs(source, candidate, directory):
     return source_target
 
 
+def aggregate_record(con, topic_id):
+    rows = con.execute("""SELECT * FROM field_results WHERE topic_id=?
+                          ORDER BY CASE field WHEN 'title' THEN 0 ELSE 1 END""", (topic_id,)).fetchall()
+    if len(rows) != 2:
+        raise ValueError("exact title/body result slots required")
+    if any(row["outcome"] not in ("pending", "held", "review_required") for row in rows):
+        raise ValueError("invalid field outcome")
+    outcomes = {row["field"]: row["outcome"] for row in rows}
+    outcome = "held" if "held" in outcomes.values() else (
+        "pending" if "pending" in outcomes.values() else "review_required")
+    audit = {"field_outcomes": outcomes, "field_input_hashes": {row["field"]: row["input_hash"] for row in rows},
+             "field_text_sha256": {row["field"]: row["text_sha256"] for row in rows},
+             "publication_allowed": False}
+    error, fields = None, None
+    if outcome == "review_required":
+        fields = {row["field"]: row["output"] for row in rows}
+        audit.update({row["field"]: json.loads(row["audit"]) for row in rows})
+        audit["corrected_fields_sha256"] = privacy.digest(fields)
+    elif outcome == "held":
+        failed = next(row for row in rows if row["outcome"] == "held")
+        error = failed["error"]
+        audit.update(failed_field=failed["field"], reason=error)
+    con.execute("""UPDATE records SET outcome=?,fields=?,audit=?,error=?,attempts=? WHERE topic_id=?""",
+                (outcome, json.dumps(fields, ensure_ascii=False) if fields is not None else None,
+                 json.dumps(audit, ensure_ascii=False), error, max(row["attempts"] for row in rows), topic_id))
+
+
 def proposals(source, candidate_path, candidate_sha, source_content_sha, results, ids, cfg,
               minutes=20, limit=30, detector=privacy.detect, endpoint="http://127.0.0.1:18081/v1", runtime=None,
-              api_key_file=None, max_record_attempts=2):
+              api_key_file=None, max_field_attempts=2):
     candidate = read_verified(candidate_path, candidate_sha)
     if candidate.get("private_preview") is not True or candidate.get("publish_allowed") is not False:
         raise ValueError("existing candidate must remain private and review-required")
@@ -109,103 +144,150 @@ def proposals(source, candidate_path, candidate_sha, source_content_sha, results
     if not selected or any(type(topic_id) is not int for topic_id in selected) \
             or len(selected) != len(set(selected)) or set(selected) - required.keys():
         raise ValueError("required ID scope is empty/duplicate/outside candidate")
-    if limit < 1 or minutes <= 0 or type(max_record_attempts) is not int or max_record_attempts < 1:
+    if limit < 1 or minutes <= 0 or type(max_field_attempts) is not int or max_field_attempts < 1:
         raise ValueError("positive local execution bounds required")
     results = Path(results)
     results.mkdir(parents=True, exist_ok=True, mode=0o700)
     if any((results / name).resolve() in (Path(candidate_path).resolve(), Path(source).resolve())
-           for name in ("records.db", "progress.json")):
+           for name in ("records.db", "progress.json", "field-coverage.json")):
         raise ValueError("output overlaps source/candidate")
     identity = {"candidate_sha256": candidate_sha, "source_content_sha256": source_content_sha,
                 "selection_sha256": privacy.digest(selected), "model_prompt_rules": weekly.identity(cfg),
-                "runtime": runtime}
+                "runtime": runtime, "coverage_schema": "questions-local-fields-v1"}
     deadline = time.monotonic() + minutes * 60
     with closing(_readonly_snapshot(source)) as src, closing(sqlite3.connect(results / "records.db")) as con:
+        (results / "records.db").chmod(0o600)
+        con.row_factory = sqlite3.Row
         topics = {row["id"]: row for row in src.execute("SELECT * FROM topics ORDER BY id")}
         if corpus.content_hash(topics.values()) != source_content_sha or set(selected) - topics.keys():
             raise ValueError("source-linked membership/content hash mismatch")
-        if {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")} - {"state", "records"}:
+        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if tables - {"state", "records", "field_results"}:
             raise ValueError("results DB contains unrelated/private source tables")
+        previous = con.execute("SELECT value FROM state WHERE key='identity'").fetchone() if "state" in tables else None
+        if previous and json.loads(previous[0]) != identity:
+            raise ValueError("private review input/model/scope/coverage changed; use new results directory")
+        if previous and ("field_results" not in tables
+                         or con.execute("SELECT COUNT(*) FROM field_results").fetchone()[0] != len(selected) * 2
+                         or con.execute("SELECT COUNT(*) FROM records").fetchone()[0] != len(selected)):
+            raise ValueError("durable field coverage slots are missing; restore verified backup")
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=FULL")
         con.executescript(SCHEMA)
-        previous = con.execute("SELECT value FROM state WHERE key='identity'").fetchone()
-        if previous and json.loads(previous[0]) != identity:
-            raise ValueError("private review input/model/scope changed; use new results directory")
         con.execute("INSERT OR REPLACE INTO state VALUES ('identity',?)", (json.dumps(identity),))
         for topic_id in selected:
             fields = {field: required[topic_id][field] for field in ("title", "body")}
             input_hash = privacy.digest([corpus.fingerprint(topics[topic_id]), fields, identity])
             con.execute("INSERT OR IGNORE INTO records(topic_id,input_hash,outcome) VALUES (?,?,'pending')",
                         (topic_id, input_hash))
-        con.commit() # One durable result slot per required ID exists before any inference.
-        done = 0
-        for topic_id, input_hash, outcome in con.execute(
-                """SELECT topic_id,input_hash,outcome FROM records
+            if con.execute("SELECT input_hash FROM records WHERE topic_id=?", (topic_id,)).fetchone()[0] != input_hash:
+                raise ValueError("record input hash differs")
+            for field, text in fields.items():
+                text_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                field_hash = privacy.digest([input_hash, field, text_sha])
+                con.execute("""INSERT OR IGNORE INTO field_results(topic_id,field,input_hash,text_sha256,outcome)
+                               VALUES (?,?,?,?,'pending')""", (topic_id, field, field_hash, text_sha))
+                saved = con.execute("SELECT input_hash,text_sha256 FROM field_results WHERE topic_id=? AND field=?",
+                                    (topic_id, field)).fetchone()
+                if tuple(saved) != (field_hash, text_sha):
+                    raise ValueError("field input hash differs")
+            aggregate_record(con, topic_id)
+        if (con.execute("SELECT COUNT(*) FROM records").fetchone()[0] != len(selected)
+                or con.execute("SELECT COUNT(*) FROM field_results").fetchone()[0] != len(selected) * 2):
+            raise ValueError("field coverage membership differs")
+        con.commit() # Two durable field slots per required ID exist before any inference.
+        attempted_topics = set()
+        for row in con.execute(
+                """SELECT topic_id,field,input_hash,text_sha256,outcome FROM field_results
                    WHERE outcome='pending' OR (outcome='held' AND attempts<?)
-                   ORDER BY CASE outcome WHEN 'pending' THEN 0 ELSE 1 END, attempts, topic_id""",
-                (max_record_attempts,)).fetchall():
-            if done >= limit or time.monotonic() >= deadline:
+                   ORDER BY CASE outcome WHEN 'pending' THEN 0 ELSE 1 END, attempts, topic_id,
+                            CASE field WHEN 'title' THEN 0 ELSE 1 END""",
+                (max_field_attempts,)).fetchall():
+            if time.monotonic() >= deadline:
                 break
-            done += 1
-            fields, audit = {}, {}
-            failed_field = "source"
-            held_audit = {"input_hash": input_hash, "reason": "attempt_interrupted",
-                          "field_input_hashes": {field: privacy.digest(required[topic_id][field])
-                                                 for field in ("title", "body")},
+            topic_id, field = row["topic_id"], row["field"]
+            if topic_id not in attempted_topics and len(attempted_topics) >= limit:
+                continue
+            attempted_topics.add(topic_id)
+            held_audit = {"input_hash": row["input_hash"], "text_sha256": row["text_sha256"],
+                          "reason": "attempt_interrupted",
                           "publication_allowed": False}
-            con.execute("""UPDATE records SET outcome='held',fields=NULL,audit=?,
-                           error='attempt_interrupted',attempts=attempts+1 WHERE topic_id=?""",
-                        (json.dumps(held_audit), topic_id))
+            con.execute("""UPDATE field_results SET outcome='held',output=NULL,audit=?,
+                           error='attempt_interrupted',attempts=attempts+1 WHERE topic_id=? AND field=?""",
+                        (json.dumps(held_audit), topic_id, field))
+            aggregate_record(con, topic_id)
             con.commit()
+            model_calls = 0
             try:
                 posts = split_raw(topics[topic_id]["thread_raw"] or "")
                 if not posts or posts[0]["n"] != 1:
                     raise privacy.ProposalError("source_evidence_missing")
-                for field in ("title", "body"):
-                    failed_field = field
-                    text = required[topic_id][field]
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise privacy.ProposalError("context_or_time_budget")
-                    fields[field], audit[field] = detector(
-                        text, posts, endpoint, cfg["redaction_model"], timeout=min(120, remaining), attempts=2,
-                        api_key_file=api_key_file, op_username=topics[topic_id]["op_username"])
-                    if privacy.findings(fields[field], posts, topics[topic_id]["op_username"]):
-                        raise privacy.ProposalError("residual_identifiers")
-                audit.update(input_hash=input_hash, original_fields_sha256=privacy.digest(
-                    {field: required[topic_id][field] for field in ("title", "body")}),
-                    corrected_fields_sha256=privacy.digest(fields), publication_allowed=False)
-                con.execute("""UPDATE records SET outcome='review_required',fields=?,audit=?,error=NULL
-                               WHERE topic_id=?""",
-                            (json.dumps(fields, ensure_ascii=False), json.dumps(audit, ensure_ascii=False), topic_id))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise privacy.ProposalError("context_or_time_budget")
+                output, audit = detector(
+                    required[topic_id][field], posts, endpoint, cfg["redaction_model"],
+                    timeout=min(120, remaining), attempts=2, api_key_file=api_key_file,
+                    op_username=topics[topic_id]["op_username"])
+                model_calls = audit.get("model_calls", 0)
+                if privacy.findings(output, posts, topics[topic_id]["op_username"]):
+                    raise privacy.ProposalError("residual_identifiers")
+                audit.update(input_hash=row["input_hash"], text_sha256=row["text_sha256"],
+                             publication_allowed=False)
+                con.execute("""UPDATE field_results SET outcome='review_required',output=?,audit=?,error=NULL,
+                               completed_attempts=completed_attempts+1,model_calls=model_calls+?
+                               WHERE topic_id=? AND field=?""",
+                            (output, json.dumps(audit, ensure_ascii=False), audit.get("model_calls", 0), topic_id, field))
             except (ValueError, httpx.HTTPError) as error:
                 reason = getattr(error, "reason", "input_or_transport_validation")
-                held_audit.update({"failed_field": failed_field, "reason": reason,
-                              "original_fields_sha256": privacy.digest(
-                                  {field: required[topic_id][field] for field in ("title", "body")}),
-                              "model_calls": sum(item.get("model_calls", 0) for item in audit.values())
-                                             + getattr(error, "model_calls", 0),
-                              "publication_allowed": False})
-                con.execute("""UPDATE records SET outcome='held',fields=NULL,audit=?,error=?
-                               WHERE topic_id=?""",
-                            (json.dumps(held_audit), reason, topic_id))
+                held_audit.update(reason=reason, model_calls=getattr(error, "model_calls", model_calls))
+                con.execute("""UPDATE field_results SET outcome='held',output=NULL,audit=?,error=?,
+                               completed_attempts=completed_attempts+1,model_calls=model_calls+?
+                               WHERE topic_id=? AND field=?""",
+                            (json.dumps(held_audit), reason, held_audit["model_calls"], topic_id, field))
+            aggregate_record(con, topic_id)
             con.commit()
         counts = dict(con.execute("SELECT outcome,COUNT(*) FROM records GROUP BY outcome"))
         held_reasons = dict(con.execute("SELECT error,COUNT(*) FROM records WHERE outcome='held' GROUP BY error"))
-        exhausted = con.execute("SELECT COUNT(*) FROM records WHERE outcome='held' AND attempts>=?",
-                                (max_record_attempts,)).fetchone()[0]
+        exhausted = con.execute("SELECT COUNT(DISTINCT topic_id) FROM field_results WHERE outcome='held' AND attempts>=?",
+                                (max_field_attempts,)).fetchone()[0]
+        field_counts = {field: dict(con.execute("SELECT outcome,COUNT(*) FROM field_results WHERE field=? GROUP BY outcome",
+                                               (field,))) for field in ("title", "body")}
+        coverage = []
+        for row in con.execute("SELECT * FROM field_results ORDER BY topic_id,field"):
+            coverage.append({key: row[key] for key in ("topic_id", "field", "input_hash", "text_sha256", "outcome",
+                                                      "attempts", "completed_attempts", "model_calls", "error")})
+            coverage[-1].update(audit_sha256=privacy.digest(json.loads(row["audit"])) if row["audit"] else None,
+                                output_sha256=hashlib.sha256(row["output"].encode()).hexdigest()
+                                if row["output"] is not None else None)
+        coverage_doc = {"schema": "questions-local-fields-v1", "identity": identity, "fields": coverage,
+                        "privacy_cleared": 0, "publication_allowed": False}
+        coverage_path = results / "field-coverage.json"
+        coverage_path.write_text(json.dumps(coverage_doc, sort_keys=True) + "\n")
+        coverage_path.chmod(0o600)
         report = {"version": 1, "identity": identity, "required": len(selected), "counts": counts,
-                  "held_reasons": held_reasons, "max_record_attempts": max_record_attempts,
+                  "held_reasons": held_reasons, "max_field_attempts": max_field_attempts,
                   "retry_exhausted": exhausted,
+                  "field_counts": field_counts, "fields_required": len(coverage),
+                  "field_held_reasons": {field: dict(con.execute(
+                      "SELECT error,COUNT(*) FROM field_results WHERE field=? AND outcome='held' GROUP BY error",
+                      (field,))) for field in ("title", "body")},
+                  "fields_completed": sum(row["completed_attempts"] > 0 and row["error"] != "attempt_interrupted"
+                                          for row in coverage),
+                  "fields_model_attempted": sum(row["model_calls"] > 0 for row in coverage),
+                  "unaccounted_field_attempts": sum(row["attempts"] - row["completed_attempts"] for row in coverage),
+                  "field_retry_exhausted": sum(row["outcome"] == "held" and row["attempts"] >= max_field_attempts
+                                               for row in coverage),
+                  "field_coverage_sha256": corpus.file_hash(coverage_path),
                   "proposal_unresolved": counts.get("pending", 0) + counts.get("held", 0),
                   "unresolved": len(selected),
                   "privacy_cleared": 0, "publication_allowed": False}
         (results / "progress.json").write_text(json.dumps(report, sort_keys=True) + "\n")
         (results / "records.db").chmod(0o600)
         (results / "progress.json").chmod(0o600)
-    print(json.dumps({key: report[key] for key in ("required", "counts", "unresolved", "proposal_unresolved", "privacy_cleared",
-                                                 "publication_allowed")}))
+    print(json.dumps({key: report[key] for key in ("required", "counts", "field_counts", "fields_required",
+                                                 "fields_completed", "fields_model_attempted", "unresolved",
+                                                 "proposal_unresolved", "privacy_cleared", "publication_allowed")}))
     return report
 
 
@@ -300,8 +382,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--minutes", type=float, default=20)
-    parser.add_argument("--max-record-attempts", type=int, default=2,
-                        help="per-record invocation cap; exhausted records remain held, never cleared")
+    parser.add_argument("--max-field-attempts", "--max-record-attempts", dest="max_field_attempts", type=int, default=2,
+                        help="per-field attempt cap (legacy record flag alias); exhausted fields remain held")
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--fixture-sha256")
     args = parser.parse_args()
@@ -322,7 +404,7 @@ def main():
             ids = json.loads(args.ids.read_text()) if args.ids else None
             proposals(source, args.candidate, args.candidate_sha256, args.source_content_sha256,
                       args.out, ids, cfg, args.minutes, args.limit, endpoint=args.base_url, runtime=runtime,
-                      api_key_file=args.api_key_file, max_record_attempts=args.max_record_attempts)
+                      api_key_file=args.api_key_file, max_field_attempts=args.max_field_attempts)
     else:
         evaluate(args.fixture, args.fixture_sha256, args.out, cfg, args.base_url, runtime,
                  api_key_file=args.api_key_file, minutes=args.minutes, limit=args.limit)

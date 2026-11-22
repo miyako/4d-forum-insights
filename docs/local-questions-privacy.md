@@ -58,18 +58,36 @@ backups include WAL contents and are integrity/checksum checked; candidate bytes
 are copied independently; previous result DBs are backed up before retries.
 An advisory single-writer lock protects each result set.
 
-`records.db` creates one slot per required ID before inference. It binds exact
-candidate/source/selection/model/prompt/rules/runtime identity, then records exact
-source input and field hashes, structured span audit, corrected display hashes,
-bounded attempts and `pending`, `held` or `review_required` outcome. It refuses
-changed inputs/scope/model in the same results directory. Pending records get
-their first attempt before held retries. `--max-record-attempts` defaults to two
-record attempts across invocations (reserved durably before inference, so an
-interrupted run consumes an attempt); exhausted records remain held for local
-review, never cleared. Successful current proposals are skipped. `progress.json`
-includes held-reason and exhausted-retry counts. Held audits contain only fixed
-error categories, failed field, input hashes and call counts, not response/source
-text. Historical generic errors remain unknown until an eligible retry.
+`records.db` creates one aggregate record plus **two `field_results` slots per
+required ID** before inference. Each title/body slot has its own UTF-8 text SHA-256,
+input hash bound to source/candidate/scope/model/prompt/rules/runtime identity,
+`pending`, `held` or `review_required` outcome, attempts, completed attempts,
+known model-call count, and private output/audit. A title failure cannot abort its
+body. Budget exhaustion leaves an unattempted body **pending**; it gets priority
+over held title retries next invocation. Successful fields are reused independently.
+Any held field holds its aggregate record; otherwise pending fields keep it
+pending. Only two successful proposals produce aggregate `review_required`, still
+not privacy clearance. Partial aggregate display fields remain NULL.
+
+`--limit 30` bounds distinct topics touched, not fields: both fields are eligible
+within the time budget. `--max-field-attempts` defaults to two attempts per field
+across invocations (the legacy `--max-record-attempts` flag is an alias). Attempts
+are reserved durably before inference; interruptions consume the cap. At most four
+field attempts occur per topic with the default policy; aggregate `attempts` is
+the maximum field attempt count, not total HTTP calls. Exhausted fields remain held.
+This coverage schema changes run identity: **use a new output directory for old
+topic-only results**, preserving old evidence. No old topic hold or successful
+topic row is silently promoted to field coverage.
+
+`progress.json` includes topic and title/body counts, required/completed/model-
+attempted field counts, per-field held reasons, exhausted retries and unaccounted
+interrupted attempts. A completed source-evidence hold is **not** a model attempt;
+transport attempts are **not** valid proposals. Unknown interrupted calls are not
+invented. Private `field-coverage.json` has exactly one entry per ID/field with
+input/text hashes, state/attempt counts and audit/output hashes (no display text);
+its exact file SHA-256 is bound in progress. The live SQLite field slots remain
+authoritative if interruption prevents refreshing reports. Held field audits
+contain fixed categories/hashes/call counts, never response/source/exception text.
 No output overwrites the original candidate or any source/ratings DB.
 
 Gemma sees each display field plus source-linked identity hints, including explicit
@@ -89,6 +107,9 @@ record still lacking independent privacy clearance. `privacy_cleared` remains ze
 even empty spans and regex passes are proposals, not independent review. A separate
 source-linked local review must verify privacy and retained technical meaning before
 corrected output is promoted into exact-hash translation/publication clearance.
+The corrected local synthetic challenge still had two missed gold spans in
+unheld outputs: complete field coverage and valid proposals cannot establish
+privacy recall or authorize publication.
 
 ## Synthetic challenge evaluation and independence
 
