@@ -14,8 +14,11 @@ import sqlite3
 import sys
 import time
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline/src"))
 from fminer import db, enrich, questions, questions_corpus as corpus, questions_privacy as privacy
+from fminer import questions_openai_privacy as openai_privacy
 from fminer.questions_export import WARNING_TEXT, _bool_or_none
 from fminer.scrape import split_raw
 import publish_data as publisher
@@ -25,6 +28,14 @@ CREATE TABLE IF NOT EXISTS displays (
  topic_id INTEGER PRIMARY KEY, freshness_hash TEXT NOT NULL, source_hash TEXT NOT NULL,
  fields TEXT, display_hash TEXT, audit TEXT, audit_hash TEXT, error TEXT
 );
+CREATE TABLE IF NOT EXISTS display_fields (
+ topic_id INTEGER NOT NULL, field TEXT NOT NULL, freshness_hash TEXT NOT NULL,
+ input_hash TEXT NOT NULL, outcome TEXT NOT NULL, output TEXT, audit TEXT, error TEXT,
+ attempts INTEGER NOT NULL DEFAULT 0, completed_attempts INTEGER NOT NULL DEFAULT 0,
+ model_calls INTEGER NOT NULL DEFAULT 0, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+ completion_tokens INTEGER NOT NULL DEFAULT 0, usage_unreported_calls INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(topic_id,field)
+);
 """
 
 
@@ -32,11 +43,12 @@ def config(path):
     data = json.loads(Path(path).read_text())
     if data["version"] != 1 or data["context"] != 16384 or data["parallel"] != 1:
         raise ValueError("unsupported weekly model configuration")
+    data["openai_redaction_model"] = os.environ.get("OPENAI_REDACTION_MODEL", "")
     return data
 
 
 def identity(cfg):
-    return privacy.digest([cfg, privacy.PROMPT_VERSION, privacy.RULE_VERSION,
+    return privacy.digest([cfg, openai_privacy.VERSION, privacy.RULE_VERSION,
                            corpus.PROMPT_VERSION, corpus.EVIDENCE_VERSION])
 
 
@@ -50,12 +62,15 @@ def timestamp(value):
 
 def readiness(root, cfg):
     root = Path(root)
+    if not re.fullmatch(openai_privacy.MODEL_PATTERN, cfg.get("openai_redaction_model", "")):
+        raise ValueError("explicit pinned OpenAI redaction model snapshot required")
     gate = json.loads((root / "readiness.json").read_text())
     evidence_path = root / "evaluation.json"
     evidence = json.loads(evidence_path.read_text())
     if (gate.get("schema") != "questions-weekly-readiness-v1"
             or gate.get("initial_en_fr_ja_published") is not True
             or gate.get("weekly_private_processing_authorized") is not True
+            or gate.get("openai_redaction_authorized") is not True
             or gate.get("identity") != identity(cfg)
             or gate.get("evaluation_sha256") != corpus.file_hash(evidence_path)
             or not isinstance(gate.get("reviewer"), str) or not gate["reviewer"].strip()):
@@ -63,6 +78,8 @@ def readiness(root, cfg):
     timestamp(gate.get("reviewed_at"))
     if (evidence.get("schema") != "questions-redaction-heldout-v1"
             or evidence.get("identity") != identity(cfg)
+            or evidence.get("provider") != "openai"
+            or evidence.get("model_snapshot") != cfg["openai_redaction_model"]
             or evidence.get("source_linked") is not True
             or evidence.get("independent_heldout") is not True
             or evidence.get("review_approved") is not True
@@ -107,19 +124,29 @@ def fresh_hash(topic, rating, cfg):
                            rating["decision_version"], rating["evidence_version"], identity(cfg)])
 
 
-def proposals(source, root, cfg, endpoint, limit=100, minutes=30, detector=privacy.detect):
+def proposals(source, root, cfg, limit=100, minutes=30, detector=openai_privacy.detect):
     if limit < 1 or minutes <= 0:
         raise ValueError("positive execution bounds required")
     root = Path(root)
-    privacy.local_endpoint(endpoint)
-    errors = done = held = 0
+    readiness(root, cfg)
+    delta_path = root / "delta-source.json"
+    delta = json.loads(delta_path.read_text())
+    pending = set(delta.get("privacy_pending", []))
+    if any(type(topic_id) is not int or topic_id <= 0 for topic_id in pending):
+        raise ValueError("invalid private redaction delta queue")
+    errors = done = held = held_fields = 0
     deadline = time.monotonic() + minutes * 60
     with closing(corpus.connect(source, root / "ratings.db")) as ratings, \
             closing(display_connect(root / "display.db")) as displays:
         topics = ratings.execute("SELECT * FROM source.topics ORDER BY id").fetchall()
         if corpus.content_hash(topics) != corpus.get_state(ratings, "source")["source_content_sha256"]:
             raise ValueError("source changed since classification preparation")
+        if pending - {topic["id"] for topic in topics}:
+            raise ValueError("redaction queue has missing source IDs")
+        work = []
         for topic in topics:
+            if topic["id"] not in pending:
+                continue
             rating = ratings.execute("SELECT * FROM questions_decisions WHERE topic_id=?", (topic["id"],)).fetchone()
             old = displays.execute("SELECT * FROM displays WHERE topic_id=?", (topic["id"],)).fetchone()
             if (not rating or corpus.fingerprint(topic) != rating["input_hash"]
@@ -128,40 +155,120 @@ def proposals(source, root, cfg, endpoint, limit=100, minutes=30, detector=priva
                 continue
             freshness = fresh_hash(topic, rating, cfg)
             if old and old["freshness_hash"] == freshness and old["fields"] and not old["error"]:
-                continue
-            if done + errors >= limit or time.monotonic() >= deadline:
-                held += 1
+                pending.discard(topic["id"])
                 continue
             fields = {"title": topic["title_en"], "body": topic["summary_paragraph"]}
             _, english_fresh = corpus.prepared(topic)
-            try:
-                if not english_fresh or any(not isinstance(v, str) or not v.strip() for v in fields.values()):
-                    raise ValueError("fresh English display unavailable")
-                posts = split_raw(topic["thread_raw"])
-                audit, cleared = {}, {}
-                for field, text in fields.items():
+            if old and (old["freshness_hash"] != freshness or
+                        (old["error"] and old["error"] != "pending privacy proposals")):
+                displays.execute("DELETE FROM display_fields WHERE topic_id=?", (topic["id"],))
+            if not old or old["freshness_hash"] != freshness or (
+                    old["error"] and old["error"] != "pending privacy proposals"):
+                displays.execute("INSERT OR REPLACE INTO displays VALUES (?,?,?,NULL,NULL,NULL,NULL,?)",
+                                 (topic["id"], freshness, corpus.fingerprint(topic), "pending privacy proposals"))
+            for field, text in fields.items():
+                field_hash = privacy.digest([freshness, field, text])
+                previous = displays.execute("SELECT * FROM display_fields WHERE topic_id=? AND field=?",
+                                            (topic["id"], field)).fetchone()
+                if previous and (previous["freshness_hash"] != freshness or previous["input_hash"] != field_hash):
+                    raise ValueError("cached field identity mismatch")
+                if not previous:
+                    displays.execute("""INSERT INTO display_fields(topic_id,field,freshness_hash,input_hash,outcome)
+                                     VALUES (?,?,?,?,'pending')""",
+                                     (topic["id"], field, freshness, field_hash))
+            work.append((topic, freshness, fields, english_fresh))
+        displays.commit()
+        # First attempts for all pending fields take precedence over retries of held fields.
+        attempted_topics = set()
+        for state in ("pending", "held"):
+          for topic, freshness, fields, english_fresh in work:
+            for field, text in fields.items():
+                row = displays.execute("SELECT * FROM display_fields WHERE topic_id=? AND field=?",
+                                       (topic["id"], field)).fetchone()
+                if row["outcome"] != state or (state == "held" and row["attempts"] >= 2):
+                    continue
+                if time.monotonic() >= deadline or (topic["id"] not in attempted_topics and len(attempted_topics) >= limit):
+                    continue
+                attempted_topics.add(topic["id"])
+                displays.execute("""UPDATE display_fields SET outcome='held',output=NULL,audit=NULL,
+                                 error='attempt_interrupted',attempts=attempts+1 WHERE topic_id=? AND field=?""",
+                                 (topic["id"], field))
+                displays.commit()
+                audit = None
+                try:
+                    if not english_fresh or not isinstance(text, str) or not text.strip():
+                        raise privacy.ProposalError("fresh_english_missing")
+                    posts = split_raw(topic["thread_raw"] or "")
+                    if not posts or posts[0]["n"] != 1:
+                        raise privacy.ProposalError("source_evidence_missing")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise ValueError("redaction budget exhausted")
-                    cleared[field], audit[field] = detector(
-                        text, posts, endpoint, cfg["redaction_model"], timeout=min(120, remaining), attempts=2,
-                        op_username=topic["op_username"])
+                        raise privacy.ProposalError("time_budget")
+                    output, audit = detector(text, posts, cfg["openai_redaction_model"],
+                                             timeout=min(120, remaining), attempts=2,
+                                             op_username=topic["op_username"])
+                    if privacy.findings(output, posts, topic["op_username"]):
+                        raise privacy.ProposalError("residual_identifiers")
+                    audit.update(input_hash=row["input_hash"], freshness_hash=freshness,
+                                 identity=identity(cfg), review_required=True, publication_allowed=False)
+                    usage = audit.get("usage") or {}
+                    displays.execute("""UPDATE display_fields SET outcome='review_required',output=?,audit=?,error=NULL,
+                                     completed_attempts=completed_attempts+1,model_calls=model_calls+?,
+                                     prompt_tokens=prompt_tokens+?,completion_tokens=completion_tokens+?,
+                                     usage_unreported_calls=usage_unreported_calls+?
+                                     WHERE topic_id=? AND field=?""",
+                                     (output, json.dumps(audit, ensure_ascii=False), audit.get("model_calls", 0),
+                                      usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                                      audit.get("usage_unreported_calls", 0), topic["id"], field))
+                    done += 1
+                except (ValueError, httpx.HTTPError) as error:
+                    reason = getattr(error, "reason", "input_or_transport_validation")
+                    safe_audit = {"input_hash": row["input_hash"], "reason": reason,
+                                  "model_calls": getattr(error, "model_calls", (audit or {}).get("model_calls", 0)),
+                                  "usage": getattr(error, "usage", (audit or {}).get("usage")),
+                                  "usage_unreported_calls": getattr(error, "usage_unreported_calls",
+                                                                    (audit or {}).get("usage_unreported_calls")),
+                                  "publication_allowed": False}
+                    usage = safe_audit["usage"] or {}
+                    displays.execute("""UPDATE display_fields SET outcome='held',output=NULL,audit=?,error=?,
+                                     completed_attempts=completed_attempts+1,model_calls=model_calls+?,
+                                     prompt_tokens=prompt_tokens+?,completion_tokens=completion_tokens+?,
+                                     usage_unreported_calls=usage_unreported_calls+?
+                                     WHERE topic_id=? AND field=?""",
+                                     (json.dumps(safe_audit), reason, safe_audit["model_calls"],
+                                      usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                                      safe_audit["usage_unreported_calls"] or 0, topic["id"], field))
+                    errors += 1
+                displays.commit()
+        for topic, freshness, fields, _ in work:
+            rows = displays.execute("SELECT * FROM display_fields WHERE topic_id=? ORDER BY field", (topic["id"],)).fetchall()
+            if len(rows) != 2 or any(row["outcome"] != "review_required" for row in rows):
+                held += 1
+                held_fields += sum(row["outcome"] == "held" for row in rows)
+                continue
+            try:
+                cleared = {row["field"]: row["output"] for row in rows}
+                audit = {row["field"]: json.loads(row["audit"]) for row in rows}
+                audit["usage_totals"] = {row["field"]: {key: row[key] for key in
+                    ("attempts", "completed_attempts", "model_calls", "prompt_tokens", "completion_tokens",
+                     "usage_unreported_calls")} for row in rows}
                 audit.update(source_hash=corpus.fingerprint(topic), freshness_hash=freshness,
                              identity=identity(cfg), review_required=True, publication_allowed=False)
                 displays.execute(
                     """INSERT OR REPLACE INTO displays VALUES (?,?,?,?,?,?,?,NULL)""",
                     (topic["id"], freshness, corpus.fingerprint(topic), json.dumps(cleared, ensure_ascii=False),
                      privacy.digest(cleared), json.dumps(audit, ensure_ascii=False), privacy.digest(audit)))
-                done += 1
-            except ValueError:
-                # Invalidate the previous cleared output on failure; retain audit in encrypted DB backup.
-                displays.execute("INSERT OR REPLACE INTO displays VALUES (?,?,?,NULL,NULL,NULL,NULL,?)",
-                                 (topic["id"], freshness, corpus.fingerprint(topic),
-                                  "proposal failed or fresh English missing; held for private review"))
-                errors += 1
+            except (ValueError, TypeError):
+                raise ValueError("invalid private field cache") from None
             displays.commit()
-    print(json.dumps({"proposed": done, "held": held, "errors": errors, "publication_allowed": False}))
-    if errors:
+            pending.discard(topic["id"])
+        delta["privacy_pending"] = sorted(pending)
+        tmp = delta_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(delta, sort_keys=True))
+        tmp.replace(delta_path)
+    print(json.dumps({"proposed_fields": done, "held_topics": held, "held_fields": held_fields,
+                      "errors": errors, "publication_allowed": False}))
+    if errors or held_fields:
         raise RuntimeError("Questions proposals held after validation failures; inspect encrypted checkpoint")
 
 
@@ -226,7 +333,7 @@ def prepare(source, root):
 
 
 def raw_fingerprint(row):
-    return privacy.digest({key: row[key] for key in ("title", "first_post_raw", "thread_raw")})
+    return privacy.digest({key: row[key] for key in ("title", "first_post_raw", "thread_raw", "op_username")})
 
 
 def capture_delta(source, root):
@@ -251,9 +358,10 @@ def enrich_delta(source, root, cfg, endpoint, limit=100, minutes=20):
         baseline = {str(row["id"]): raw_fingerprint(row) for row in rows}
         if set(state["baseline"]) - baseline.keys():
             raise ValueError("raw delta source lost reviewed membership")
-        pending = set(state["pending"]) | {int(key) for key, value in baseline.items()
-                                           if state["baseline"].get(key) != value}
-        state.update(baseline=baseline, pending=sorted(pending))
+        changed = {int(key) for key, value in baseline.items() if state["baseline"].get(key) != value}
+        pending = set(state["pending"]) | changed
+        privacy_pending = set(state.get("privacy_pending", [])) | changed
+        state.update(baseline=baseline, pending=sorted(pending), privacy_pending=sorted(privacy_pending))
         path.write_text(json.dumps(state, sort_keys=True)) # Persist pending IDs before any model work.
         before = {row["id"]: row["enriched_at"] for row in rows}
         try:
@@ -320,9 +428,19 @@ def status(source, root, cfg):
                         counts[f"{locale}_current" if current else f"{locale}_missing_or_stale"] += 1
             counts[state] += 1
             languages.setdefault(topic["lang"] or "unknown", Counter())[state] += 1
+        field_counts = {field: dict(displays.execute(
+            "SELECT outcome,COUNT(*) FROM display_fields WHERE field=? GROUP BY outcome", (field,)))
+            for field in ("title", "body")}
+        usage = displays.execute("""SELECT COALESCE(SUM(model_calls),0),COALESCE(SUM(prompt_tokens),0),
+                                          COALESCE(SUM(completion_tokens),0),COALESCE(SUM(usage_unreported_calls),0),
+                                          COALESCE(SUM(attempts-completed_attempts),0) FROM display_fields""").fetchone()
     total = sum(sum(counter.values()) for counter in languages.values())
     report = {"version": 1, "topics": total, "counts": dict(counts),
               "languages": {lang: dict(counter) for lang, counter in languages.items()},
+              "field_counts": field_counts,
+              "redaction_current_cache_usage": dict(zip(
+                          ("known_model_calls", "known_prompt_tokens", "known_completion_tokens",
+                           "calls_with_unknown_usage", "interrupted_attempts"), usage)),
               "unresolved": total - counts["display_cleared"], "publication_allowed": False}
     (root / "status.json").write_text(json.dumps(report, sort_keys=True) + "\n")
     print(json.dumps(report, sort_keys=True))
@@ -424,7 +542,7 @@ def main():
         readiness(args.root, cfg)
         print("Weekly private-processing readiness verified; publication remains disabled")
     elif args.command == "propose":
-        proposals(args.source, args.root, cfg, args.base_url, args.limit, args.minutes)
+        proposals(args.source, args.root, cfg, args.limit, args.minutes)
     elif args.command == "prepare":
         prepare(args.source, args.root)
     elif args.command == "candidate":

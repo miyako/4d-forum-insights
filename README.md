@@ -158,8 +158,8 @@ hash-keyed localization cache for eventual finalization; it does not resume proc
 ## Delta updates
 
 The separate [weekly Questions pipeline](docs/weekly-questions.md) uses the same
-Monday cadence, local Kev/Gemma inference and existing embedding/translation
-caches. Activation and publication stay off until initial EN/FR/JA publication,
+Monday cadence, local Kev/enrichment and embedding caches, and OpenAI redaction
+and translation. Activation and publication stay off until initial EN/FR/JA publication,
 measured privacy readiness and exact-hash reviews pass. The
 [on-device PI proposal/evaluation tool](docs/local-questions-privacy.md) supports
 private existing-candidate review without hosted processing or automatic clearance.

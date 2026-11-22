@@ -112,11 +112,8 @@ timeout 55m bash -c 'cd pipeline && uv run -q python ../scripts/questions_corpus
 stop_server
 rm -f build/questions-models/decision.gguf
 
-start_server redaction 18081
 (cd pipeline && timeout 35m uv run -q python ../scripts/questions_weekly.py propose \
     --config "../$CFG" --root "../$ROOT" --source "../$SOURCE" --limit 100 --minutes 30)
-stop_server
-rm -f build/questions-models/redaction.gguf
 
 uv run --project pipeline python scripts/questions_weekly.py export --root "$ROOT" --source "$SOURCE" --out "$ROOT/embedding"
 node scripts/questions_weekly_translate.mjs --data "$ROOT/embedding" --store "$ROOT/locales" \

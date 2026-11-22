@@ -28,6 +28,7 @@ class WeeklyTests(unittest.TestCase):
         self.root.mkdir()
         self.source = Path(self.temp.name) / "source.db"
         self.cfg = weekly.config(ROOT / "config/questions-weekly.json")
+        self.cfg["openai_redaction_model"] = "synthetic-2026-01-01"
         with db.connect(self.source) as con:
             for n in (1, 2):
                 con.execute(
@@ -56,6 +57,7 @@ class WeeklyTests(unittest.TestCase):
 
     def write_readiness(self):
         evaluation = {"schema": "questions-redaction-heldout-v1", "identity": weekly.identity(self.cfg),
+                      "provider": "openai", "model_snapshot": self.cfg["openai_redaction_model"],
                       "source_linked": True, "independent_heldout": True, "review_approved": True,
                       "dataset_sha256": "a" * 64,
                       "languages": {lang: {"identifiers": 10, "missed": 0, "minimum_recall": 1}
@@ -63,21 +65,24 @@ class WeeklyTests(unittest.TestCase):
         (self.root / "evaluation.json").write_text(json.dumps(evaluation))
         readiness = {"schema": "questions-weekly-readiness-v1", "identity": weekly.identity(self.cfg),
                      "initial_en_fr_ja_published": True, "weekly_private_processing_authorized": True,
+                     "openai_redaction_authorized": True,
                      "evaluation_sha256": corpus.file_hash(self.root / "evaluation.json"),
                      "reviewer": "synthetic-test-only", "reviewed_at": "2026-01-03T00:00:00Z"}
         weekly.capture_delta(self.source, self.root)
+        delta = json.loads((self.root / "delta-source.json").read_text())
+        delta["privacy_pending"] = [1, 2]
+        (self.root / "delta-source.json").write_text(json.dumps(delta))
         readiness["raw_delta_seed_sha256"] = json.loads((self.root / "delta-source.json").read_text())["initial_baseline_sha256"]
         (self.root / "readiness.json").write_text(json.dumps(readiness))
         (self.root / "reviews.json").write_text(json.dumps({"schema": "questions-weekly-reviews-v1", "entries": {}}))
 
     @staticmethod
-    def detector(text, posts, endpoint, model, **kwargs):
+    def detector(text, posts, model, **kwargs):
         return text, {"spans": [], "original_hash": weekly.privacy.digest(text)}
 
     def propose(self, detector=None):
         with redirect_stdout(io.StringIO()):
-            weekly.proposals(self.source, self.root, self.cfg, "http://127.0.0.1:18081/v1",
-                             detector=detector or self.detector)
+            weekly.proposals(self.source, self.root, self.cfg, detector=detector or self.detector)
 
     def approve(self):
         entries = {}
@@ -101,7 +106,7 @@ class WeeklyTests(unittest.TestCase):
         self.assertEqual(self.exported(), [])
         self.approve()
         self.assertEqual(len(self.exported()), 2)
-        with patch.object(weekly.privacy, "detect", side_effect=AssertionError("no new inference")):
+        with patch.object(weekly.openai_privacy, "detect", side_effect=AssertionError("no new inference")):
             self.propose()
         manifest = json.loads((self.root / "embedding/manifest.json").read_text())
         self.assertEqual(manifest["questions"], [])
@@ -112,6 +117,9 @@ class WeeklyTests(unittest.TestCase):
         self.approve()
         with db.connect(self.source) as con:
             con.execute("UPDATE topics SET thread_raw=? WHERE id=2", (raw(["Edited question?", "Reply."]),))
+        delta = json.loads((self.root / "delta-source.json").read_text())
+        delta["privacy_pending"] = [2]
+        (self.root / "delta-source.json").write_text(json.dumps(delta))
         with redirect_stdout(io.StringIO()):
             weekly.prepare(self.source, self.root)
         with closing(corpus.connect(self.source, self.root / "ratings.db")) as con:
@@ -137,6 +145,9 @@ class WeeklyTests(unittest.TestCase):
         with closing(weekly.display_connect(self.root / "display.db")) as con:
             con.execute("UPDATE displays SET error='retry' WHERE topic_id=2")
             con.commit()
+        delta = json.loads((self.root / "delta-source.json").read_text())
+        delta["privacy_pending"] = [2]
+        (self.root / "delta-source.json").write_text(json.dumps(delta))
         def failing(*args, **kwargs):
             raise ValueError("private response details")
         with self.assertRaises(RuntimeError):
@@ -151,6 +162,45 @@ class WeeklyTests(unittest.TestCase):
         with db.connect(self.source) as con:
             con.execute("UPDATE topics SET op_username='NewSourceOP' WHERE id=2")
         self.assertEqual([row["id"] for row in self.exported()], [1])
+
+    def test_title_failure_does_not_skip_body_and_delta_queue_survives(self):
+        calls = []
+        def detector(text, *args, **kwargs):
+            calls.append(text)
+            if text == "How does ORDA work?":
+                raise weekly.privacy.DetectionFailure(2, "uncertain")
+            return text, {"spans": [], "model_calls": 1,
+                          "usage": {"prompt_tokens": 10, "completion_tokens": 5}, "usage_unreported_calls": 0}
+        with self.assertRaises(RuntimeError):
+            self.propose(detector)
+        with closing(weekly.display_connect(self.root / "display.db")) as con:
+            results = con.execute("SELECT field,outcome,attempts,model_calls FROM display_fields WHERE topic_id=1 ORDER BY field").fetchall()
+            self.assertEqual([tuple(row) for row in results],
+                             [("body", "review_required", 1, 1), ("title", "held", 2, 4)])
+            self.assertIsNone(con.execute("SELECT fields FROM displays WHERE topic_id=1").fetchone()[0])
+        self.assertIn("Use ORDA in 4D v20.", calls)
+        self.assertEqual(json.loads((self.root / "delta-source.json").read_text())["privacy_pending"], [1, 2])
+        self.assertEqual(self.exported(), [])
+        with self.assertRaises(RuntimeError):
+            self.propose(lambda *args, **kwargs: self.fail("exhausted or successful fields retried"))
+
+    def test_proposal_queue_only_processes_new_or_changed_ids(self):
+        delta = json.loads((self.root / "delta-source.json").read_text())
+        delta["privacy_pending"] = [2]
+        (self.root / "delta-source.json").write_text(json.dumps(delta))
+        self.propose()
+        with closing(weekly.display_connect(self.root / "display.db")) as con:
+            self.assertEqual([row[0] for row in con.execute("SELECT topic_id FROM displays")], [2])
+        self.assertEqual(json.loads((self.root / "delta-source.json").read_text())["privacy_pending"], [])
+
+    def test_openai_processing_requires_exact_authorized_model_evaluation(self):
+        gate = json.loads((self.root / "readiness.json").read_text())
+        gate["openai_redaction_authorized"] = False
+        (self.root / "readiness.json").write_text(json.dumps(gate))
+        with self.assertRaisesRegex(ValueError, "not authorized"):
+            self.propose(lambda *args, **kwargs: self.fail("unapproved request"))
+        with self.assertRaises(ValueError):
+            weekly.readiness(self.root, {**self.cfg, "openai_redaction_model": "different-2026-01-01"})
 
     def test_model_and_measured_recall_changes_block_readiness(self):
         weekly.readiness(self.root, self.cfg)

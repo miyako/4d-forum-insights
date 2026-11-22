@@ -23,7 +23,7 @@ no-op updates.
    checkout, before inference.
 2. Fetch new/edited threads using the existing delta fetch and 300-topic rolling
    sweep (45 recent days). Compare title/original opening/full raw thread hashes
-   against the reviewed raw-source seed; locally enrich only changed/new raw
+   and original-poster identity against the reviewed raw-source seed; locally enrich only changed/new raw
    records and persisted unfinished delta IDs (at most 100). Pre-existing
    enrichment backlog is not swept or allowed to re-rate frozen decisions.
    There is no full-corpus summary backfill. Source membership remains all languages.
@@ -33,14 +33,25 @@ no-op updates.
    membership, then classify at most 100 pending records within 45 minutes.
    The frozen final decisions are a required durable seed, not reconstructed
    from public arrays or re-rated for a test.
-4. Gemma proposes exact PI substrings/kinds in generated English title/body only.
+4. OpenAI receives one generated English title/body field and only source identity
+   hints whose normalized text matches that field. This may transmit identifiers
+   that redaction has not yet caught. It never receives source posts, the forum
+   database, classifier decisions, private audits or keys as input content (the
+   API key is used only for authentication). Known credential/token
+   patterns are held locally before a request; pattern checks cannot guarantee
+   detection of every secret. Hosted processing requires an explicit reviewed
+   authorization and account/data-handling policy. OpenAI proposes exact PI substrings/kinds.
    Python resolves unique exact substrings to Unicode code-point offsets, validates kinds,
    bounds and non-overlap, and applies `[redacted]` deterministically without
    rewriting other characters. Existing source-linked identifier rules,
    sign-off/name checks and additional NFKC/casefold username/explicit OP checks run
    after redaction. Invalid, uncertain, incomplete, oversized or residual-PI
-   responses hold the row and invalidate its previous current output. Two
-   bounded attempts; no hosted fallback. Excess context is held, never silently
+   responses hold the field and invalidate its previous current output. Only
+   queued changed/new IDs are processed; the persisted queue survives retries.
+   Each title/body has a separate hash-bound durable slot, pending-first scheduling
+   and up to two durable attempts, each containing up to two HTTP calls. A title
+   hold never suppresses a body attempt. Only two valid fields make an unreviewed
+   proposal; no model response alone is clearance. Excess context is held, never silently
    truncated. Ambiguous repeated substrings are held, not guessed; model numeric
    offsets are not blindly corrected. OP metadata changes invalidate PI freshness
    even when Questions decision evidence is unchanged.
@@ -82,13 +93,23 @@ the publisher refuses older sample-only dependencies.
 | Role | Model / quantization | Runtime |
 |---|---|---|
 | Classification | Kev-4B Q8_0, HF `f4624b6bb7072f1bab726a622c1cad3f96030b9e` | matches final source-backed checkpoint revision |
-| Enrichment / PI span proposals | Gemma-4-E4B-it Q8_0, HF `8903cb408c7df39cde2ed15fac397e6d7be92951` | text-only, no mmproj/MTP download |
+| Enrichment | Gemma-4-E4B-it Q8_0, HF `8903cb408c7df39cde2ed15fac397e6d7be92951` | local text-only, no mmproj/MTP download; never used for weekly PI redaction |
+| PI proposals | `OPENAI_REDACTION_MODEL` explicit dated OpenAI model snapshot | structured outputs, `OPENAI_API_KEY`; no silent model fallback |
 | Local server | llama.cpp `b11669`, verified Ubuntu x64 archive SHA-256 | `ubuntu-latest`, CPU, 4 threads, context 16384, one slot |
 
-Models are downloaded from immutable HF revisions and checked before execution.
+Local models are downloaded from immutable HF revisions and checked before execution.
 Servers bind loopback ports 18080/18081 only; startup is bounded at ten minutes,
 model downloads at 15 minutes with two retries. Model steps have outer
-25/55/35-minute timeouts; translation and embeddings are separately bounded.
+25/55/35-minute timeouts; redaction and translation requests are separately bounded.
+An OpenAI redaction run touches at most 100 queued topics and 200 fields, with
+at most four HTTP calls per field (800 total), 2,400 completion tokens per call,
+12,000 display characters and 4,000 hint characters per field; 120 seconds per
+field attempt and 30 minutes per run. These are execution bounds, **not a dollar
+cap**. Configure account-level spending controls before activation. The private
+current field cache reports known API usage and calls; retries, errors without
+usage and interrupted calls may have unknown cost, and changing a field discards
+its older cache totals. Provider billing is authoritative; do not treat these
+partial counters as total spend.
 The job's 300-minute limit leaves room for setup, lease acquisition and encrypted
 saves. A hard runner termination cannot guarantee an exit trap; restore the last
 verified encrypted checkpoint and inspect any surviving lease. No Copilot token
@@ -105,10 +126,11 @@ Its stable layout is:
 ```text
 ratings.db                   # existing corpus_state/decisions/attempts schema
 display.db                   # displays table from scripts/questions_weekly.py
+                             # plus independent display_fields proposal slots
 readiness.json
 evaluation.json
 reviews.json
-delta-source.json            # reviewed initial raw hashes + resumable pending delta IDs
+delta-source.json            # reviewed initial raw hashes + pending enrichment/redaction IDs
 locales/fr/questions.json    # existing overlay contract
 locales/ja/questions.json
 locales/text-cache/          # existing canonical string caches/provenance
@@ -141,7 +163,8 @@ blanket authorization for future deltas:
 
 - `readiness.json`: schema `questions-weekly-readiness-v1`, `identity` from
   `questions_weekly.identity(config)`, `initial_en_fr_ja_published:true`,
-  `weekly_private_processing_authorized:true`, `evaluation_sha256`, nonempty
+  `weekly_private_processing_authorized:true`, `openai_redaction_authorized:true`,
+  `evaluation_sha256`, nonempty
   `reviewer`, timezone-aware `reviewed_at`, `raw_delta_seed_sha256` matching
   `delta-source.json.initial_baseline_sha256`. The seeded corpus runtime must also
   match the exact final Kev revision/prompt/evidence.
@@ -153,13 +176,15 @@ does not infer anything or overwrite an existing baseline. Bind its
 `initial_baseline_sha256` in readiness before activation. This prevents the first
 weekly run from treating the old full-corpus backlog as new delta work.
 - `evaluation.json`: schema `questions-redaction-heldout-v1`, same `identity`,
+  `provider:"openai"`, `model_snapshot` equal to `OPENAI_REDACTION_MODEL`,
   `source_linked:true`, `independent_heldout:true`, `review_approved:true`,
   `dataset_sha256`, and `languages.en/fr/ja` each with positive integer
   `identifiers`, integer `missed`, and explicitly reviewed `minimum_recall`.
   Actual measured recall must meet the approved thresholds. The assertion
   record must be backed by independently reviewed evidence; the code does not
   manufacture an evaluation or authenticate the reviewer. Regex success and
-  synthetic tests do not establish PI recall. Changing the model, prompts,
+  synthetic tests do not establish PI recall. Earlier Gemma evaluations do not
+  authorize OpenAI redaction. Changing the model, prompts,
   rules or classifier identity invalidates this readiness.
 - `reviews.json`: schema `questions-weekly-reviews-v1`, `entries` keyed by ID.
   Each review has schema `questions-weekly-display-review-v1`, exact
@@ -200,11 +225,20 @@ stale locales, changed review bytes, source-linked PI findings, changed durable
 forum source or changed live preview block publication.
 
 **Current blockers:** full-corpus source-linked English/privacy and FR/JA
-clearance, measured held-out PI evaluation, reconciled encrypted seed, complete
+clearance, separately measured OpenAI held-out PI evaluation, reviewed hosted
+data-handling authorization and exact model snapshot, reconciled encrypted seed, complete
 UI/Pages support and corresponding readiness/review records are not supplied by
 this assignment. The weekly path remains unactivated. Any existing source-linked
 review findings require resolution; this implementation claims no validated
 model accuracy.
+
+The provider/identity change invalidates prior weekly readiness and display
+freshness. Existing initial approvals cannot be automatically reissued under the
+new identity; owners must reconcile already-cleared full-corpus display/locale
+assets and review bindings without sending the old corpus for automatic redaction.
+The initial raw-delta seed must be recaptured with OP identity included, under
+review and before activation. Independent review is still an external prerequisite:
+the workflow consumes exact-hash approvals; it does not author them.
 
 `questions_weekly.py status` writes private `status.json` with mutually exclusive
 per-topic stage counts, per-source-language counts, unresolved display/review
