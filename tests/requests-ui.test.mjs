@@ -7,6 +7,7 @@ import { preferredLocale, localeURL, navigationURL, stateURL, installLocale, loa
 import * as state from '../site/js/state.js';
 import * as filters from '../site/js/filter.js';
 import { KeywordIndex, normalize, afterPaint } from '../site/js/search.js';
+import { installQuestionsLink } from '../site/js/questions-core.js';
 
 const config = JSON.parse(readFileSync(new URL('../config/questions.json', import.meta.url)));
 const site = JSON.parse(readFileSync(new URL('../config/site.json', import.meta.url)));
@@ -143,6 +144,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const stale of [false, true]) {
       ...state, ...filters, KeywordIndex, normalize, afterPaint, createRequestsLocale, localizeRequestsManifest,
       preferredLocale, localeURL, navigationURL, stateURL, loadOverlay,
       installLocale: (i18n, page) => installLocale(i18n, page, document, location),
+      installQuestionsLink: (manifest) => installQuestionsLink(manifest, document),
       console, document, location, URLSearchParams, Intl, setTimeout, clearTimeout, CSS: { escape: (value) => value },
       IntersectionObserver: class { observe() {} },
       loadManifest: async () => manifest, loadTopics: async () => [topic],

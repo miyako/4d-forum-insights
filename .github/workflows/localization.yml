@@ -52,8 +52,8 @@ jobs:
 
       - name: Validate configuration and bounded inputs
         env:
-          LOCALIZATION_MODEL: ${{ vars.LOCALIZATION_MODEL }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ENTRY_BUDGET: ${{ inputs.entries || '100' }}
           MINUTE_BUDGET: ${{ inputs.minutes || '20' }}
           BATCH_SIZE: ${{ inputs.batch_size || '20' }}
@@ -70,13 +70,10 @@ jobs:
               raise SystemExit("Invalid page")
           if os.environ["TARGET_LOCALE"] not in ("all", "fr", "ja"):
               raise SystemExit("Invalid locale")
-          for name in ("LOCALIZATION_MODEL", "COPILOT_GITHUB_TOKEN"):
+          for name in ("OPENAI_MODEL", "OPENAI_API_KEY"):
               if not os.environ.get(name, "").strip():
-                  raise SystemExit(f"Configure repository {'variable' if name == 'LOCALIZATION_MODEL' else 'secret'} {name}; no fallback model/auth")
+                  raise SystemExit(f"Configure repository {'variable' if name == 'OPENAI_MODEL' else 'secret'} {name}; no fallback model/auth")
           PY
-
-      - name: Install verified hosted translator CLI
-        run: npm install --global @github/copilot@1.0.104 --no-audit --no-fund
 
       - name: Fetch current English and optional overlays
         env:
@@ -104,8 +101,8 @@ jobs:
         id: translate
         continue-on-error: true
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          LOCALIZATION_MODEL: ${{ vars.LOCALIZATION_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           LOCALIZATION_REASONING_EFFORT: ${{ vars.LOCALIZATION_REASONING_EFFORT }}
           ENTRY_BUDGET: ${{ inputs.entries || '100' }}
           MINUTE_BUDGET: ${{ inputs.minutes || '20' }}
@@ -114,7 +111,7 @@ jobs:
           TARGET_LOCALE: ${{ inputs.locale || 'all' }}
         run: |
           node scripts/localize.mjs --data site/data --store build/localization \
-            --page "$TARGET_PAGE" --locale "$TARGET_LOCALE" --model "$LOCALIZATION_MODEL" \
+            --page "$TARGET_PAGE" --locale "$TARGET_LOCALE" --model "$OPENAI_MODEL" \
             --batch-size "$BATCH_SIZE" --entries "$ENTRY_BUDGET" --minutes "$MINUTE_BUDGET" \
             --workers 1 --timeout 180 --retries 2 --report build/localization-report.json
 

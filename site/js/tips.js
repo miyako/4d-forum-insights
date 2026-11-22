@@ -3,6 +3,7 @@
 import { loadManifest, loadTopics, loadText, dataUrl, decodeRun } from './data.js';
 import { KeywordIndex, afterPaint } from './search.js';
 import { Semantic } from './semantic.js';
+import { installQuestionsLink } from './questions-core.js';
 import { rrf } from './filter.js';
 import { createLocale, preferredLocale, localeURL, stateURL, loadOverlay, installLocale, localizeDOM, modelDisclosure, semanticCredit } from './locale.js';
 import {
@@ -40,6 +41,7 @@ async function init() {
     return fail(esc(tr('Could not load data/manifest.json ({error}).', { error: e.message })));
   }
   const m = app.manifest;
+  installQuestionsLink(m);
   app.tips = m.tips;
   if (!app.tips?.runs?.length) return fail(`${tr('No knowledge-base data yet: run')} <code>fminer kb-classify</code>, <code>make data</code>.`);
   document.title = tr(app.tips.title);
@@ -218,6 +220,12 @@ function renderStatic() {
   $('#conf').addEventListener('change', (e) => { app.state.conf = Number(e.target.value); update(); });
   $('#since').addEventListener('change', (e) => { app.state.since = Number(e.target.value); update(); });
   $('#sort').addEventListener('change', (e) => { app.state.sort = e.target.value; update(); });
+  $('#clear-filters').addEventListener('click', () => {
+    const { q, mode, sort } = app.state;
+    app.state = { ...parseTipsState(''), q, mode, sort };
+    syncControls();
+    update();
+  });
   $('#presets').addEventListener('click', (e) => {
     const a = e.target.closest('[data-params]');
     if (!a) return;

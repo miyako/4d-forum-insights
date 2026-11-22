@@ -6,7 +6,7 @@ import {
   canonical, sourceHash, recordsFromColumns, protect, restore, emptyOverlay, makeBatch, REQUESTS_PROTECTION_VERSION,
   importBatch, persistBatch, coverage, readOverlay, writeOverlay, validateOverlay, readSourceRecords,
 } from '../scripts/localization.mjs';
-import { main, callCopilot, translationPrompt } from '../scripts/localize.mjs';
+import { main, callOpenAI, translationPrompt } from '../scripts/localize.mjs';
 import {
   stringUnits, makeUnitBatch, importUnitBatch, readTextCache, materialize, main as backfill,
 } from '../scripts/backfill-requests.mjs';
@@ -153,11 +153,86 @@ test('export, import and coverage CLI share the portable checkpoint format', asy
   } finally { rmSync(root, { recursive: true }); }
 });
 
-test('translation invocation errors are explicit, with no silent model fallback', async () => {
-  await assert.rejects(callCopilot('test', { model: 'test', executable: '/usr/bin/false' }), /exit/);
+test('OpenAI translation sends the configured model and validates the response', async () => {
+  const batch = makeBatch('tips', 'ja', records);
+  const translated = { batch_id: batch.batch_id, records: batch.records };
+  const result = await callOpenAI(translationPrompt(batch), {
+    model: 'example-model', apiKey: 'test-key', reasoningEffort: 'low',
+    fetchImpl: async (url, options) => {
+      assert.equal(url, 'https://api.openai.com/v1/chat/completions');
+      assert.equal(options.headers.Authorization, 'Bearer test-key');
+      const request = JSON.parse(options.body);
+      assert.equal(request.model, 'example-model');
+      assert.equal(request.reasoning_effort, 'low');
+      assert.deepEqual(request.response_format, { type: 'json_object' });
+      assert.match(request.messages[0].content, /untrusted data/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(translated) } }] });
+    },
+  });
+  const overlay = emptyOverlay('tips', 'ja');
+  importBatch(overlay, records, batch, result);
+  assert.equal(coverage(records, overlay).current, 1);
+});
+
+test('OpenAI translation failures are explicit and never include credentials or server text', async () => {
+  const options = { model: 'test', apiKey: 'secret-key' };
+  await assert.rejects(callOpenAI('test', { ...options, apiKey: '' }), /OPENAI_API_KEY/);
+  await assert.rejects(callOpenAI('test', { ...options, model: '' }), /OPENAI_MODEL/);
+  await assert.rejects(callOpenAI('test', { ...options,
+    fetchImpl: async () => new Response('secret-key', { status: 401 }) }), err =>
+    /HTTP 401/.test(err.message) && !err.message.includes('secret-key'));
+  await assert.rejects(callOpenAI('test', { ...options,
+    fetchImpl: async () => { throw Error('secret-key'); } }), err =>
+    /network error/.test(err.message) && !err.message.includes('secret-key'));
+  for (const [body, expected] of [
+    ['not json', /response JSON/],
+    [JSON.stringify({ choices: [{ finish_reason: 'stop', message: { refusal: 'no' } }] }), /refused/],
+    [JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{}' } }] }), /incomplete/],
+    [JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{' } }] }), /translation JSON/],
+  ]) {
+    await assert.rejects(callOpenAI('test', { ...options, fetchImpl: async () => new Response(body) }), expected);
+  }
+  await assert.rejects(callOpenAI('test', { ...options, timeout: 10,
+    fetchImpl: (_, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', reject)) }), /timed out/);
+  await assert.rejects(callOpenAI('test', { ...options,
+    fetchImpl: async () => new Response('x'.repeat(8_000_001)) }), /size limit/);
   const prompt = translationPrompt(makeBatch('tips', 'ja', records));
   assert.match(prompt, /untrusted data/);
   assert.match(prompt, /Japanese/);
+});
+
+test('default localization runner uses OpenAI and resumes without retranslating current records', async () => {
+  const root = mkdtempSync(path.join(testRoot, 'openai-runner-'));
+  const oldFetch = globalThis.fetch, oldModel = process.env.OPENAI_MODEL, oldKey = process.env.OPENAI_API_KEY;
+  try {
+    const data = path.join(root, 'data'), store = path.join(root, 'store'), report = path.join(root, 'report.json');
+    mkdirSync(path.join(data, 'tips'), { recursive: true });
+    writeFileSync(path.join(data, 'tips', 'entries.json'), JSON.stringify({
+      ids: [42], headline: [source.headline], body: [source.body],
+    }));
+    process.env.OPENAI_MODEL = 'example-model';
+    process.env.OPENAI_API_KEY = 'test-key';
+    let calls = 0;
+    globalThis.fetch = async (_, options) => {
+      calls++;
+      const request = JSON.parse(options.body);
+      assert.equal(request.model, 'example-model');
+      const batch = JSON.parse(request.messages[0].content.split('INPUT JSON:\n')[1]);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        content: JSON.stringify({ batch_id: batch.batch_id, records: batch.records }),
+      } }] });
+    };
+    const args = ['--data', data, '--store', store, '--page', 'tips', '--locale', 'fr', '--report', report];
+    assert.equal((await main(args)).translated, 1);
+    assert.equal((await main(args)).translated, 0);
+    assert.equal(calls, 1);
+    assert.deepEqual(readOverlay(store, 'tips', 'fr').entries[42].fields, source);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldModel === undefined) delete process.env.OPENAI_MODEL; else process.env.OPENAI_MODEL = oldModel;
+    if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey;
+    rmSync(root, { recursive: true });
+  }
 });
 
 test('a failed worker retains successful peers and a rerun resumes only unfinished records', async () => {

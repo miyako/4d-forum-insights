@@ -49,6 +49,7 @@ class FakeGitHub(publisher.GitHub):
         raise AssertionError((endpoint, method, fields))
 
     def release(self, *args):
+        self.calls.append(("release", args))
         if args[0] == "download":
             name = args[args.index("--pattern") + 1]
             directory = Path(args[args.index("--dir") + 1])
@@ -67,6 +68,171 @@ class PublicationTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.root)
+
+    def public_questions(self):
+        result = subprocess.run(["node", "--input-type=module", "-e", """
+import {COVERAGE,IMPACT,COMPLEXITY,DOMAINS} from './site/js/questions-core.js';
+const rating=labels=>({choice:Object.keys(labels)[0],probabilities:Object.fromEntries(Object.keys(labels).map((key,i)=>[key,i===0?1:0]))});
+console.log(JSON.stringify({version:1,schema_version:'questions-ui-public-processed-preview-v1',
+public_preview:true,private_preview:false,publish_allowed:true,representative:false,generated_at:'2026-11-11T00:00:00Z',
+snapshot_scope:'processed',processed_count:2,corpus_total:10,corpus_complete:false,eligible_question_count:1,
+entries:[1,2].map(id=>({id,title:'English title '+id,body:'Existing summary',active:null,lang:'fr',accepted:null,closed:false,replies:null,
+answers:{has_question:{noul:id===1?.8:.4},coverage:rating(COVERAGE),impact:rating(IMPACT),technicality:rating(COMPLEXITY),
+clarification:{noul:.1},...Object.fromEntries(Object.keys(DOMAINS).map(key=>['domain_'+key,{noul:.5}]))}}))}));
+"""], check=True, capture_output=True, text=True)
+        path = self.root / "questions-candidate.json"
+        path.write_text(result.stdout)
+        return path, json.loads(result.stdout)
+
+    def test_questions_publication_requires_complete_locales_and_preserves_english_and_other_pages(self):
+        source = self.source()
+        english = self.root / "site-data.tar.gz"
+        publisher.pack_site(source, english)
+        candidate, questions = self.public_questions()
+        hashes = publisher.questions_hashes(questions)
+        store = self.root / "questions-store"
+        for locale in ("fr", "ja"):
+            (store / locale).mkdir(parents=True)
+            overlay = {"version": 1, "locale": locale, "page": "questions", "entries": {
+                key: {"source_hash": digest, "translation_version": "1",
+                      "field_sources": {"private": "/private/cache/path"},
+                      "fields": {"title": "Titre traduit", "body": "Résumé traduit"}}
+                for key, digest in hashes.items()
+            }}
+            (store / locale / "questions.json").write_text(json.dumps(overlay))
+        gh = FakeGitHub()
+        gh.assets["site-data.tar.gz"] = english.read_bytes()
+        first = self.root / "first"
+        first.mkdir()
+        japanese = store / "ja/questions.json"
+        original = japanese.read_text()
+        incomplete = json.loads(original)
+        del incomplete["entries"]["2"]
+        japanese.write_text(json.dumps(incomplete))
+        with gh.lease(), self.assertRaisesRegex(ValueError, "Incomplete ja"):
+            publisher.publish_questions_preview(gh, "data", candidate, store, first, set(gh.assets))
+        self.assertEqual(set(gh.assets), {"site-data.tar.gz"}, "no uploads when completeness fails")
+        japanese.write_text(original)
+        tip = {"version": 1, "locale": "fr", "page": "tips", "entries": {
+            "1": {"source_hash": publisher.english_hashes(english)["tips"]["1"],
+                  "translation_version": "1", "fields": {"headline": "Conseil", "body": "Texte"}},
+        }}
+        existing = self.root / "existing.tar.gz"
+        with tarfile.open(existing, "w:gz") as tar:
+            data = json.dumps(tip).encode()
+            member = tarfile.TarInfo("data/locales/fr/tips.json")
+            member.size = len(data)
+            tar.addfile(member, io.BytesIO(data))
+        gh.assets["localization.tar.gz"] = existing.read_bytes()
+        second = self.root / "second"
+        second.mkdir()
+        with gh.lease():
+            publisher.publish_questions_preview(gh, "data", candidate, store, second, set(gh.assets))
+        self.assertEqual(gh.assets["site-data.tar.gz"], english.read_bytes())
+        documents = publisher.read_overlays(second / "localization.tar.gz")
+        self.assertEqual(documents["data/locales/fr/tips.json"], tip)
+        for locale in ("fr", "ja"):
+            entries = documents[f"data/locales/{locale}/questions.json"]["entries"]
+            self.assertEqual(set(entries), set(hashes))
+            self.assertNotIn("field_sources", entries["1"])
+        uploads = [args[2] for kind, args in gh.calls if kind == "release" and args[0] == "upload"]
+        self.assertEqual([Path(path).name for path in uploads], ["localization.tar.gz", "questions-preview.json"])
+        published = json.loads(gh.assets["questions-preview.json"])
+        self.assertEqual(published["entries"], questions["entries"])
+        # A later Requests/Tips publisher must authenticate Questions against the separate current asset.
+        third = self.root / "third"
+        third.mkdir()
+        with gh.lease():
+            publisher.publish_localization(gh, "data", store, third, set(gh.assets))
+        self.assertEqual(publisher.read_overlays(third / "localization.tar.gz"), documents)
+        fourth = self.root / "fourth"
+        fourth.mkdir()
+        unchanged_assets = dict(gh.assets)
+        with gh.lease(), self.assertRaisesRegex(ValueError, "preview changed"):
+            publisher.publish_questions_preview(gh, "data", candidate, store, fourth, set(gh.assets),
+                                                expected_preview_hash="0" * 64)
+        self.assertEqual(gh.assets, unchanged_assets, "a stale base cannot upload either asset")
+
+    def test_expanded_pages_gate_rejects_missing_stale_or_empty_body_translations(self):
+        source = self.source()
+        candidate, questions = self.public_questions()
+        (source / "questions").mkdir()
+        (source / "questions/preview.json").write_text(candidate.read_text())
+        manifest = json.loads((source / "manifest.json").read_text())
+        manifest["questions_view"] = {"public_preview": True, "snapshot_scope": "processed",
+                                     "files": {"entries": "questions/preview.json"}}
+        (source / "manifest.json").write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "Incomplete fr"):
+            publisher.check_questions_localization(source)
+        hashes = publisher.questions_hashes(questions)
+        for locale in ("fr", "ja"):
+            directory = source / "locales" / locale
+            directory.mkdir(parents=True)
+            document = {"version": 1, "locale": locale, "page": "questions", "entries": {
+                key: {"source_hash": digest, "translation_version": "1",
+                      "fields": {"title": "Titre", "body": "Résumé"}} for key, digest in hashes.items()
+            }}
+            (directory / "questions.json").write_text(json.dumps(document))
+        publisher.check_questions_localization(source)
+        path = source / "locales/fr/questions.json"
+        document = json.loads(path.read_text())
+        document["entries"]["1"]["source_hash"] = "0" * 64
+        path.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, "Incomplete fr"):
+            publisher.check_questions_localization(source)
+        document["entries"]["1"]["source_hash"] = hashes["1"]
+        document["entries"]["1"]["fields"]["body"] = ""
+        path.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, "Incomplete fr"):
+            publisher.check_questions_localization(source)
+
+    def test_questions_overlays_reuse_canonical_title_body_in_prepare_and_final_archive(self):
+        source = self.source()
+        manifest_path = source / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["questions_view"] = {"files": {"entries": "questions/sample.json?t=1"}}
+        manifest["questions"] = [{"id": "fr"}]
+        manifest_path.write_text(json.dumps(manifest))
+        (source / "questions").mkdir()
+        rows = {"version": 1, "entries": [
+            {"id": 42, "title": "Original English", "body": "Existing summary", "lang": "fr"},
+            {"id": 43, "title": "Without summary", "body": None, "lang": "ja"},
+        ]}
+        (source / "questions/sample.json").write_text(json.dumps(rows))
+        hashes = publisher.questions_hashes(rows)
+        canonical = json.dumps({"title": "Original English", "body": "Existing summary"},
+                               sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        self.assertEqual(hashes["42"], hashlib.sha256(canonical.encode()).hexdigest())
+        seeds = self.root / "seeds"
+        (seeds / "fr").mkdir(parents=True)
+        document = {"version": 1, "locale": "fr", "page": "questions", "entries": {
+            "42": {"source_hash": hashes["42"], "translation_version": "1",
+                   "fields": {"title": "Titre traduit", "body": "Résumé traduit"}},
+            "43": {"source_hash": hashes["43"], "translation_version": "1",
+                   "fields": {"title": "Sans résumé", "body": ""}},
+        }}
+        (seeds / "fr/questions.json").write_text(json.dumps(document))
+        prepared = self.root / "prepared"
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(json.loads((prepared / "fr/questions.json").read_text()), document)
+        private_document = json.loads(json.dumps(document))
+        private_document["entries"]["42"]["field_sources"] = {"private_provenance": "/private/cache/path"}
+        (seeds / "fr/questions.json").write_text(json.dumps(private_document))
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(json.loads((prepared / "fr/questions.json").read_text()), document,
+                         "even local browser overlays exclude private field provenance")
+        self.assertEqual(json.loads((seeds / "fr/questions.json").read_text()), private_document,
+                         "durable provenance is retained in the source store")
+        archive = self.root / "questions-source.tar.gz"
+        publisher.pack_site(source, archive)
+        self.assertEqual(publisher.english_hashes(archive)["questions"], hashes)
+        self.assertEqual(json.loads(manifest_path.read_text())["questions"], [{"id": "fr"}])
+        rows["entries"][0]["body"] = "Changed summary"
+        (source / "questions/sample.json").write_text(json.dumps(rows))
+        publisher.prepare_localization(source, seeds, prepared)
+        self.assertEqual(set(json.loads((prepared / "fr/questions.json").read_text())["entries"]), {"43"})
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            publisher.questions_source_path({"questions_view": {"files": {"entries": "../private.json"}}})
 
     def test_competing_publishers_cannot_enter_and_failure_releases(self):
         gh = FakeGitHub()
@@ -502,6 +668,8 @@ class WorkflowPermissionsTests(unittest.TestCase):
         pages = (workflows / "pages.yml").read_text()
         self.assertIn("test -f site/requests/index.html", pages)
         self.assertRegex(pages, r"(?m)^          path: site(?:\s+#.*)?$")
+        self.assertLess(pages.index("Install approved Questions public preview"), pages.index("prepare-localization"))
+        self.assertIn("check-questions-localization --data site/data", pages)
 
     def test_localization_publisher_can_upload_assets_and_dispatch_pages(self):
         workflow = (Path(__file__).parents[1] / ".github/workflows/localization.yml").read_text()

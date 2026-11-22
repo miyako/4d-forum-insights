@@ -103,17 +103,19 @@ export const translatedFields = (page, item) => page === 'requests'
   ? { title_en: item.title_en ?? '', line: item.line ?? '', para: item.para ?? '' }
   : page === 'tips'
   ? { headline: item.headline, body: item.body }
+  : page === 'questions'
+  ? { title: item.title, body: item.body ?? '' }
   : { question: item.question, positions: item.positions, outcome: item.outcome };
 
 function validFields(page, fields, source) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return false;
   const keys = page === 'requests' ? ['title_en', 'line', 'para']
-    : page === 'tips' ? ['headline', 'body'] : ['question', 'positions', 'outcome'];
+    : page === 'tips' ? ['headline', 'body'] : page === 'questions' ? ['title', 'body'] : ['question', 'positions', 'outcome'];
   if (Object.keys(fields).sort().join() !== [...keys].sort().join()) return false;
   return keys.every((key) => key === 'positions'
     ? Array.isArray(fields[key]) && fields[key].length === source[key].length
       && fields[key].every((part) => typeof part === 'string' && part.trim())
-    : typeof fields[key] === 'string' && (page === 'requests'
+    : typeof fields[key] === 'string' && (page === 'requests' || page === 'questions'
       ? Boolean(fields[key].trim()) === Boolean(source[key].trim())
       : (!source[key] || fields[key].trim())));
 }
@@ -170,11 +172,11 @@ export function installLocale(i18n, page, document = globalThis.document, locati
   nav.innerHTML = LOCALES.map((locale) => `<a lang="${locale}" hreflang="${locale}" href="${localeURL(location.href, locale).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"${locale === i18n.locale ? ' aria-current="true"' : ''}>${{ en: 'EN', fr: 'FR', ja: '日本語' }[locale]}</a>`).join('');
   for (const link of document.querySelectorAll('a[href]')) {
     const href = link.dataset.localeHref || link.getAttribute('href');
-    if (link.closest('#locale-nav') || !/^(?:\.\.\/(?:tips\/|voices\/|requests\/)?|\.\/)$/.test(href)) continue;
+    if (link.closest('#locale-nav') || !/^(?:\.\.\/(?:tips\/|voices\/|requests\/|questions\/)?|\.\/)$/.test(href)) continue;
     link.dataset.localeHref = href;
     link.href = navigationURL(href, i18n.locale, location.href);
   }
-  document.title = i18n.t(page === 'requests' ? '4D Forum Requests' : page === 'tips' ? '4D Forum Tips' : '4D Forum Voices');
+  document.title = i18n.t(page === 'requests' ? '4D Forum Requests' : page === 'tips' ? '4D Forum Tips' : page === 'questions' ? '4D Forum Questions' : '4D Forum Voices');
   for (const option of document.querySelectorAll('#conf option')) {
     if (Number(option.value)) option.textContent = '≥ ' + i18n.pct(Number(option.value) / 100);
   }

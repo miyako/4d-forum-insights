@@ -43,8 +43,15 @@
       <span>Model run</span>
       <select id="run"></select>
     </label>
-    <a class="btn switch" id="voices-link" href="../voices/" title="Discussions where the community weighed in" hidden>Voices</a>
-    <a class="btn switch" id="tips-link" href="../tips/" title="Answered questions and tips, by area" hidden>Tips</a>
+    <details class="page-switcher">
+      <summary class="btn" aria-label="Switch forum page">Requests</summary>
+      <nav aria-label="Forum pages">
+        <span aria-current="page">Requests</span>
+        <a id="tips-link" href="../tips/" title="Answered questions and tips, by area" hidden>Tips</a>
+        <a id="voices-link" href="../voices/" title="Discussions where the community weighed in" hidden>Voices</a>
+        <a id="questions-link" href="../questions/" hidden>Questions</a>
+      </nav>
+    </details>
     <nav class="locale-nav" id="locale-nav" aria-label="Interface language">
       <a href="?ui=en" lang="en">EN</a><a href="?ui=fr" lang="fr">FR</a><a href="?ui=ja" lang="ja">日本語</a>
     </nav>
@@ -99,6 +106,7 @@
   <footer class="footer" id="footer"></footer>
 
   <noscript><p class="noscript">This site needs JavaScript (everything runs in your browser).</p></noscript>
+  <script type="module" src="../js/page-switcher.js"></script>
   <script type="module" src="../js/app.js"></script>
 </body>
 </html>

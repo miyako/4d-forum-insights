@@ -9,6 +9,7 @@ import { KeywordIndex, normalize, afterPaint } from './search.js';
 import { Semantic } from './semantic.js';
 import { preferredLocale, localeURL, navigationURL, stateURL, installLocale, loadOverlay } from './locale.js';
 import { createRequestsLocale, localizeRequestsManifest } from './requests-messages.js';
+import { installQuestionsLink } from './questions-core.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -44,6 +45,7 @@ async function init() {
     return;
   }
   const m = app.manifest;
+  installQuestionsLink(m);
   document.title = tr('4D Forum Requests');
   m.categories.forEach((c) => app.cats.set(c.id, c));
   app.state = parseRequestsState(location.search, m.questions, m.presets);

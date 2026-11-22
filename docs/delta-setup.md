@@ -252,13 +252,11 @@ allows sending the dispatch with `github.token`; repository dispatch is an
 exception to GitHub's normal token-trigger recursion suppression.
 The localization publishing job also needs `actions: write` on its `github.token`
 to dispatch the Pages workflow after uploading overlays. This job-level permission
-is separate from the Copilot authentication secret and requires no PAT scope change.
-Set repository
-variable `LOCALIZATION_MODEL` to an explicitly available hosted model and secret
-`COPILOT_GITHUB_TOKEN` to a token authorized for Copilot CLI; there is no implicit
-model or authentication fallback. Optional variable `LOCALIZATION_REASONING_EFFORT`
-must be supported by that model. It installs verified CLI version `1.0.104`, with
-tools and built-in MCPs disabled by the runner.
+is separate from OpenAI authentication. Set repository variable `OPENAI_MODEL` to a
+Chat Completions model available to the API account and secret `OPENAI_API_KEY` to
+its API key; there is no implicit model or authentication fallback. Optional variable
+`LOCALIZATION_REASONING_EFFORT` must be supported by that model. Missing configuration
+fails localization without blocking English publication.
 
 Manual dispatch accepts `page` (`all`, `requests`, `tips`, `voices`), `locale` (`all`, `fr`,
 `ja`), `entries` (1–1000), `minutes` (1–40), and `batch_size` (1–50). Defaults are

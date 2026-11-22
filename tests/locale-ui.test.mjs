@@ -11,6 +11,7 @@ import { canonical, sourceHash as buildHash } from '../scripts/localization.mjs'
 import { parseState } from '../site/js/state.js';
 import * as tipsCore from '../site/js/tips-core.js';
 import * as voicesCore from '../site/js/voices-core.js';
+import { installQuestionsLink } from '../site/js/questions-core.js';
 import { KeywordIndex, normalize, tokenize, afterPaint } from '../site/js/search.js';
 import { rrf } from '../site/js/filter.js';
 
@@ -245,6 +246,7 @@ for (const page of ['tips', 'voices']) for (const scenario of ['en', 'fr', 'ja',
     const context = {
       ...tipsCore, ...voicesCore, SORTS: page === 'tips' ? tipsCore.SORTS : voicesCore.SORTS,
       createLocale, localeOf, preferredLocale, localeURL, stateURL, loadOverlay, installLocale: (i18n, page) => installLocale(i18n, page, document, location), localizeDOM, modelDisclosure, KeywordIndex, afterPaint, rrf,
+      installQuestionsLink: (manifest) => installQuestionsLink(manifest, document),
       console, document, location, URLSearchParams, Intl, setTimeout, clearTimeout,
       loadManifest: async () => manifest, loadTopics: async () => [topic], loadText: async () => {},
       decodeRun: () => new Map([[42, { area: { c: 'database', p: [0, 0, 1] }, qa: { c: 'solved', p: [.9, 0, 0, .1] } }]]),
