@@ -1,0 +1,91 @@
+name: Weekly Questions
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays 03:17 UTC, same cadence as delta.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialize with Requests/Tips/Voices delta. The shared ref lease also protects local writers.
+concurrency:
+  group: delta
+  cancel-in-progress: false
+
+jobs:
+  questions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DB_KEY: ${{ secrets.DB_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      OPENAI_REDACTION_MODEL: ${{ vars.OPENAI_REDACTION_MODEL }}
+      LOCALIZATION_REASONING_EFFORT: ${{ vars.LOCALIZATION_REASONING_EFFORT }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Explicit activation gate (OFF until initial EN/FR/JA publication and PI validation)
+        env:
+          ENABLED: ${{ vars.QUESTIONS_WEEKLY_ENABLED }}
+        run: |
+          if [ "$ENABLED" != true ]; then
+            echo "::error::Questions weekly readiness is OFF. Complete initial EN/FR/JA publication, measured privacy review and encrypted checkpoint seeding first."
+            exit 1
+          fi
+          test -n "$DB_KEY" || { echo "::error::Missing DB_KEY"; exit 1; }
+          test -n "$OPENAI_API_KEY" && test -n "$OPENAI_MODEL" || { echo "::error::Missing OpenAI translation configuration"; exit 1; }
+          test -n "$OPENAI_REDACTION_MODEL" || { echo "::error::Missing explicit OpenAI redaction model"; exit 1; }
+
+      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: Install existing pipeline tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 zstd jq >/dev/null
+          (cd pipeline && uv sync -q)
+          npm ci --no-audit --no-fund
+
+      - uses: actions/cache@v6
+        with:
+          path: build/hf-cache
+          key: hf-${{ hashFiles('config/site.json') }}
+
+      - name: Incremental local models, cleared-only translation and encrypted checkpoint
+        run: |
+          umask 077
+          # The lease covers pull -> source delta -> inference -> both encrypted saves.
+          # Interrupted leases are never expired/stolen automatically.
+          python3 scripts/publish_data.py with-lock -- bash pipeline/ci/run-questions-weekly.sh
+
+      - name: Reviewed complete-corpus publication gate
+        id: publish
+        env:
+          PUBLICATION_ENABLED: ${{ vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED }}
+          REVIEW_SHA256: ${{ vars.QUESTIONS_WEEKLY_PUBLICATION_REVIEW_SHA256 }}
+        run: |
+          uv run --project pipeline python scripts/questions_weekly_publish.py
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Gate status
+        if: always()
+        run: |
+          echo '### Weekly Questions' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Local Kev and enrichment; OpenAI redaction receives minimized display text and matching identity hints, translation receives only reviewed text. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Check failing step for readiness, model, checkpoint or publication-review blockers; no deployment occurs on a failed gate.' >> "$GITHUB_STEP_SUMMARY"
+
+  pages:
+    needs: questions
+    if: needs.questions.outputs.published == 'true'
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

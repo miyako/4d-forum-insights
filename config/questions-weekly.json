@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "llama_tag": "b11669",
+  "llama_archive_sha256": "cf07c1c112d709bd67e522017471de57ed0ec8bea031d732c5422351c07f65ac",
+  "decision_model": "ggml-org/Kev-4B-GGUF:Q8_0",
+  "decision_repo": "ggml-org/Kev-4B-GGUF",
+  "decision_hf_revision": "f4624b6bb7072f1bab726a622c1cad3f96030b9e",
+  "decision_file": "Kev-4B-Q8_0.gguf",
+  "decision_sha256": "7c2ebed90560522c2801389db482ac1dc4c36d828f201f6074c1d60e433948da",
+  "decision_revision": "gguf-sha256:7c2ebed90560522c2801389db482ac1dc4c36d828f201f6074c1d60e433948da;hf:f4624b6bb7072f1bab726a622c1cad3f96030b9e;llama.cpp:620d2225c/build11669;ctx16384;np1",
+  "redaction_model": "ggml-org/gemma-4-E4B-it-GGUF:Q8_0",
+  "redaction_repo": "ggml-org/gemma-4-E4B-it-GGUF",
+  "redaction_hf_revision": "8903cb408c7df39cde2ed15fac397e6d7be92951",
+  "redaction_file": "gemma-4-E4B-it-Q8_0.gguf",
+  "redaction_sha256": "49008e7cc7edadf154c8748904a89ee86eb6905d220aac568f6b7b92ca6aa0c6",
+  "context": 16384,
+  "parallel": 1
+}

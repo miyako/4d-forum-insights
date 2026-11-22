@@ -291,7 +291,9 @@ def _run_pool(con, rows, work, save, workers, label, log, budget_minutes=None):
 
 
 def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, budget_minutes=None,
-        resummarise_empty=False, log=print):
+        resummarise_empty=False, log=print, topic_ids=None):
+    if topic_ids is not None and (resummarise_empty or any(type(i) is not int or i <= 0 for i in topic_ids)):
+        raise ValueError("selective enrichment requires positive topic IDs and no summary backfill")
     llm = LLM(base_url, model)
     model_id = llm.model_id()
     if resummarise_empty:
@@ -307,6 +309,9 @@ def run(con, base_url, model, workers=4, limit=None, redo=False, stale=False, bu
             ORDER BY (t.category_id = ?) DESC, t.id DESC""",
         (db.FEATURE_REQUEST_CATEGORY,),
     ).fetchall()
+    if topic_ids is not None:
+        selected = set(topic_ids)
+        rows = [row for row in rows if row["id"] in selected]
     if limit:
         rows = rows[:limit]
     log(f"[enrich] {len(rows)} topics with {model_id}")
