@@ -14,7 +14,7 @@ import tempfile
 
 ASSET = "questions-weekly.tar.zst.enc"
 FILES = {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json",
-         "publication-review.json", "ui-publication-review.json", "status.json"}
+         "publication-review.json", "ui-publication-review.json", "status.json", "delta-source.json"}
 PREFIXES = ("locales/", "portable-locales/", "embedding/", "publication/")
 
 
@@ -59,7 +59,8 @@ def pack(root, directory):
         else:
             target.write_bytes(source.read_bytes())
         hashes[name] = checksum(target)
-    if not {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json"} <= hashes.keys():
+    if not {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json",
+            "delta-source.json"} <= hashes.keys():
         raise ValueError("checkpoint is incomplete; explicit encrypted seed required")
     (staged / "checksums.json").write_text(json.dumps(hashes, sort_keys=True))
     archive = directory / "checkpoint.tar"

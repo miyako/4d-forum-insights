@@ -22,8 +22,11 @@ no-op updates.
    with checksums in `$RUNNER_TEMP/questions-before-RUN-ATTEMPT`, outside the
    checkout, before inference.
 2. Fetch new/edited threads using the existing delta fetch and 300-topic rolling
-   sweep (45 recent days). Locally enrich only stale/new source records; there
-   is no full-corpus summary backfill. Source membership remains all languages.
+   sweep (45 recent days). Compare title/original opening/full raw thread hashes
+   against the reviewed raw-source seed; locally enrich only changed/new raw
+   records and persisted unfinished delta IDs (at most 100). Pre-existing
+   enrichment backlog is not swept or allowed to re-rate frozen decisions.
+   There is no full-corpus summary backfill. Source membership remains all languages.
    Votes/views/listing timestamps alone do not trigger new Questions inference.
 3. Reuse `questions_corpus.current` decisions with exact source fingerprint,
    decision input hash, model/revision, prompt and evidence version. Re-prepare
@@ -103,6 +106,7 @@ display.db                   # displays table from scripts/questions_weekly.py
 readiness.json
 evaluation.json
 reviews.json
+delta-source.json            # reviewed initial raw hashes + resumable pending delta IDs
 locales/fr/questions.json    # existing overlay contract
 locales/ja/questions.json
 locales/text-cache/          # existing canonical string caches/provenance
@@ -136,8 +140,16 @@ blanket authorization for future deltas:
 - `readiness.json`: schema `questions-weekly-readiness-v1`, `identity` from
   `questions_weekly.identity(config)`, `initial_en_fr_ja_published:true`,
   `weekly_private_processing_authorized:true`, `evaluation_sha256`, nonempty
-  `reviewer`, timezone-aware `reviewed_at`. The seeded corpus runtime must also
+  `reviewer`, timezone-aware `reviewed_at`, `raw_delta_seed_sha256` matching
+  `delta-source.json.initial_baseline_sha256`. The seeded corpus runtime must also
   match the exact final Kev revision/prompt/evidence.
+
+During authorized seed reconciliation only, use
+`uv run --project pipeline python scripts/questions_weekly.py capture-delta --source REVIEWED_SOURCE --root PRIVATE_CHECKPOINT`
+to initialize `delta-source.json` from the exact reviewed initial source. It
+does not infer anything or overwrite an existing baseline. Bind its
+`initial_baseline_sha256` in readiness before activation. This prevents the first
+weekly run from treating the old full-corpus backlog as new delta work.
 - `evaluation.json`: schema `questions-redaction-heldout-v1`, same `identity`,
   `source_linked:true`, `independent_heldout:true`, `review_approved:true`,
   `dataset_sha256`, and `languages.en/fr/ja` each with positive integer

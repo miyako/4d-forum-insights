@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "pipeline/src"))
 import questions_weekly as weekly
 import questions_weekly_publish as publishing
 import questions_weekly_store as store
-from fminer import db, questions_corpus as corpus
+from fminer import db, enrich, questions_corpus as corpus
 from test_questions import answers, raw
 
 
@@ -65,6 +65,8 @@ class WeeklyTests(unittest.TestCase):
                      "initial_en_fr_ja_published": True, "weekly_private_processing_authorized": True,
                      "evaluation_sha256": corpus.file_hash(self.root / "evaluation.json"),
                      "reviewer": "synthetic-test-only", "reviewed_at": "2026-01-03T00:00:00Z"}
+        weekly.capture_delta(self.source, self.root)
+        readiness["raw_delta_seed_sha256"] = json.loads((self.root / "delta-source.json").read_text())["initial_baseline_sha256"]
         (self.root / "readiness.json").write_text(json.dumps(readiness))
         (self.root / "reviews.json").write_text(json.dumps({"schema": "questions-weekly-reviews-v1", "entries": {}}))
 
@@ -169,6 +171,43 @@ class WeeklyTests(unittest.TestCase):
         self.assertEqual(report["unresolved"], 0)
         self.assertEqual(report["counts"]["fr_missing_or_stale"], 2)
         self.assertNotIn("ORDA", json.dumps(report))
+
+    def test_raw_delta_enrichment_ignores_old_backlog_and_metadata_only_changes(self):
+        with closing(db.connect(self.source)) as con:
+            con.execute("UPDATE topics SET first_post_raw='Original opening'")
+            con.execute("UPDATE topics SET enriched_at=NULL WHERE id=1")
+            con.commit()
+        (self.root / "delta-source.json").unlink()
+        weekly.capture_delta(self.source, self.root)
+        with patch.object(weekly.enrich, "run") as run, redirect_stdout(io.StringIO()):
+            weekly.enrich_delta(self.source, self.root, self.cfg, "http://127.0.0.1:18081/v1")
+            run.assert_not_called()
+        with closing(db.connect(self.source)) as con:
+            con.execute("UPDATE topics SET title='Edited title',thread_raw=? WHERE id=2",
+                        (raw(["Edited question?", "New reply."]),))
+            con.commit()
+        def complete(con, endpoint, model, **kwargs):
+            self.assertEqual(kwargs["topic_ids"], [2])
+            self.assertTrue(kwargs["redo"])
+            con.execute("UPDATE topics SET enriched_at='2026-02-03',first_post_en='Edited question?' WHERE id=2")
+            con.commit()
+        with patch.object(weekly.enrich, "run", side_effect=complete), redirect_stdout(io.StringIO()):
+            weekly.enrich_delta(self.source, self.root, self.cfg, "http://127.0.0.1:18081/v1")
+        self.assertEqual(json.loads((self.root / "delta-source.json").read_text())["pending"], [])
+        with closing(db.connect(self.source)) as con:
+            self.assertIsNone(con.execute("SELECT enriched_at FROM topics WHERE id=1").fetchone()[0])
+
+    def test_optional_enrichment_filter_is_applied_before_limit(self):
+        with closing(db.connect(self.source)) as con:
+            con.execute("UPDATE topics SET first_post_raw='Original opening'")
+            con.commit()
+            with patch.object(enrich, "LLM") as llm, patch.object(enrich, "_run_pool") as pool:
+                llm.return_value.model_id.return_value = "local-gemma"
+                enrich.run(con, "http://127.0.0.1:18081/v1", "local-gemma", redo=True,
+                           topic_ids=[1], limit=1, log=lambda _: None)
+                self.assertEqual([row["id"] for row in pool.call_args.args[1]], [1])
+            with self.assertRaises(ValueError):
+                enrich.run(con, "", "", topic_ids=[False])
     def test_publication_exact_locale_hash_and_default_off_gate(self):
         self.propose()
         self.approve()

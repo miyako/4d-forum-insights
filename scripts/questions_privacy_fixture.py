@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create held-out planted-PI synthetic examples, not real-corpus privacy labels."""
+"""Create planted-PI synthetic challenge examples, not independent held-out privacy labels."""
 
 import argparse
 import hashlib
@@ -54,7 +54,9 @@ def fixture():
                           "posts": [{"user": "AlicePrivate", "text": "Synthetic question only."}],
                           "expected_spans": spans})
     return {"schema": "questions-local-pi-gold-v1", "scope": "synthetic-planted-v1",
-            "independent_heldout": True, "real_corpus_recall_claim_allowed": False, "cases": cases}
+            "independent_heldout": False, "held_out_from_prompt_tuning": True,
+            "label_provenance": "deterministic planted labels authored in the same implementation stream",
+            "real_corpus_recall_claim_allowed": False, "cases": cases}
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ uv run --project pipeline python scripts/questions_weekly.py backup --source "$R
 uv run --project pipeline python scripts/questions_weekly.py backup --source "$ROOT/display.db" --out "$BACKUP/display.db"
 
 export FMINER_DB="$PWD/$SOURCE"
+uv run --project pipeline python scripts/questions_weekly.py capture-delta --source "$SOURCE" --root "$ROOT"
 (cd pipeline && uv run -q fminer delta --sweep-window 300 --sweep-recent-days 45)
 
 mkdir -p build/questions-models
@@ -88,10 +89,10 @@ start_server() {
     echo "::error::Local llama-server readiness timeout"; exit 1
 }
 
-# Only stale source enrichment, never the full-corpus summary backfill.
+# Only changed/new raw source text plus resumable delta IDs, never pre-existing corpus backlog.
 start_server redaction 18081
-(cd pipeline && timeout 25m uv run -q fminer enrich --base-url http://127.0.0.1:18081/v1 \
-    --model "$(jq -r .redaction_model "../$CFG")" --stale --workers 1 --budget-minutes 20)
+timeout 25m uv run --project pipeline python scripts/questions_weekly.py enrich-delta \
+    --source "$SOURCE" --root "$ROOT" --base-url http://127.0.0.1:18081/v1 --limit 100 --minutes 20
 stop_server
 rm -f build/questions-models/redaction.gguf
 

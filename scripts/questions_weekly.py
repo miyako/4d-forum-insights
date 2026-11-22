@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline/src"))
-from fminer import questions, questions_corpus as corpus, questions_privacy as privacy
+from fminer import db, enrich, questions, questions_corpus as corpus, questions_privacy as privacy
 from fminer.questions_export import WARNING_TEXT, _bool_or_none
 from fminer.scrape import split_raw
 import publish_data as publisher
@@ -85,6 +85,10 @@ def readiness(root, cfg):
                 or runtime.get("prompt") != corpus.PROMPT_VERSION or runtime.get("evidence") != corpus.EVIDENCE_VERSION
                 or corpus.get_state(con, "scope") != {"scope": "all"} or not corpus.get_state(con, "source")):
             raise ValueError("durable source-backed seed/runtime provenance differs; do not reconstruct or re-rate corpus")
+    delta = json.loads((root / "delta-source.json").read_text())
+    if (delta.get("schema") != "questions-raw-delta-v1" or not delta.get("baseline")
+            or delta.get("initial_baseline_sha256") != gate.get("raw_delta_seed_sha256")):
+        raise ValueError("reviewed raw-source delta baseline is missing")
     return gate
 
 
@@ -217,6 +221,53 @@ def prepare(source, root):
             corpus.set_state(con, "source", report)
             con.commit()
     print("Questions source prepared; exact evidence/model/prompt freshness controls reuse")
+
+
+def raw_fingerprint(row):
+    return privacy.digest({key: row[key] for key in ("title", "first_post_raw", "thread_raw")})
+
+
+def capture_delta(source, root):
+    path = Path(root) / "delta-source.json"
+    if path.exists():
+        return
+    with closing(db.connect(source)) as con:
+        baseline = {str(row["id"]): raw_fingerprint(row) for row in con.execute("SELECT * FROM topics ORDER BY id")}
+    if not baseline:
+        raise ValueError("raw delta baseline source is empty")
+    path.write_text(json.dumps({"schema": "questions-raw-delta-v1", "baseline": baseline,
+                                "initial_baseline_sha256": privacy.digest(baseline), "pending": []}, sort_keys=True))
+
+
+def enrich_delta(source, root, cfg, endpoint, limit=100, minutes=20):
+    path = Path(root) / "delta-source.json"
+    state = json.loads(path.read_text())
+    if state.get("schema") != "questions-raw-delta-v1":
+        raise ValueError("unknown raw delta baseline schema")
+    with closing(db.connect(source)) as con:
+        rows = con.execute("SELECT * FROM topics ORDER BY id").fetchall()
+        baseline = {str(row["id"]): raw_fingerprint(row) for row in rows}
+        if set(state["baseline"]) - baseline.keys():
+            raise ValueError("raw delta source lost reviewed membership")
+        pending = set(state["pending"]) | {int(key) for key, value in baseline.items()
+                                           if state["baseline"].get(key) != value}
+        state.update(baseline=baseline, pending=sorted(pending))
+        path.write_text(json.dumps(state, sort_keys=True)) # Persist pending IDs before any model work.
+        before = {row["id"]: row["enriched_at"] for row in rows}
+        try:
+            if pending:
+                enrich.run(con, endpoint, cfg["redaction_model"], workers=1, limit=limit, redo=True,
+                           budget_minutes=minutes, topic_ids=sorted(pending))
+        finally:
+            for row in con.execute("SELECT * FROM topics ORDER BY id"):
+                if (row["id"] in pending and row["enriched_at"] != before[row["id"]]
+                        and row["enriched_at"] and not row["enrich_error"] and row["first_post_en"]):
+                    pending.remove(row["id"])
+            state["pending"] = sorted(pending)
+            path.write_text(json.dumps(state, sort_keys=True))
+        print(json.dumps({"raw_delta_enrichment_pending": len(pending)}))
+        if any(row["enrich_error"] for row in con.execute("SELECT * FROM topics") if row["id"] in pending):
+            raise RuntimeError("local delta enrichment failed; pending records retained")
 
 
 def status(source, root, cfg):
@@ -353,7 +404,8 @@ def backup(source, target):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("readiness", "prepare", "propose", "export", "candidate", "backup", "status"))
+    parser.add_argument("command", choices=("readiness", "prepare", "propose", "export", "candidate", "backup",
+                                          "status", "capture-delta", "enrich-delta"))
     parser.add_argument("--config", default="config/questions-weekly.json")
     parser.add_argument("--root", default="build/questions-checkpoint")
     parser.add_argument("--source", type=Path)
@@ -376,6 +428,10 @@ def main():
         candidate(args.source, args.root, cfg)
     elif args.command == "status":
         status(args.source, args.root, cfg)
+    elif args.command == "capture-delta":
+        capture_delta(args.source, args.root)
+    elif args.command == "enrich-delta":
+        enrich_delta(args.source, args.root, cfg, args.base_url, args.limit, args.minutes)
     else:
         export_cleared(args.source, args.root, cfg, args.out)
 

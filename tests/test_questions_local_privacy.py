@@ -92,6 +92,8 @@ class LocalTests(unittest.TestCase):
         self.assertEqual(report["span_kinds"]["ja/phone"]["missed"], 1)
         self.assertEqual(report["model_calls"], 28)
         self.assertFalse(report["review_approved"])
+        self.assertFalse(report["independent_heldout"])
+        self.assertFalse(report["independence_verified"])
 
     def test_verified_weights_are_not_enough_to_reuse_a_kev_server(self):
         model, binary = self.root / "gemma.gguf", self.root / "llama-server"

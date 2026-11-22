@@ -191,9 +191,9 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
     if minutes <= 0 or limit < 1:
         raise ValueError("positive held-out execution bounds required")
     fixture = read_verified(fixture_path, fixture_sha)
-    if (fixture.get("schema") != "questions-local-pi-gold-v1" or fixture.get("independent_heldout") is not True
+    if (fixture.get("schema") != "questions-local-pi-gold-v1"
             or not isinstance(fixture.get("cases"), list) or not fixture["cases"]):
-        raise ValueError("independently labeled held-out fixture required")
+        raise ValueError("explicitly labeled evaluation fixture required")
     languages, outcomes, kinds = {}, [], {}
     seen = set()
     deadline, calls, elapsed, attempted = time.monotonic() + minutes * 60, 0, 0, 0
@@ -234,7 +234,9 @@ def evaluate(fixture_path, fixture_sha, results, cfg, endpoint, runtime=None, de
                          "detected": removed, "held": held, "not_run": not_run,
                          "non_pi_characters_redacted": collateral, "seconds": time.monotonic() - began})
     report = {"schema": "questions-local-pi-measurement-v1", "dataset_sha256": fixture_sha,
-              "identity": weekly.identity(cfg), "runtime": runtime, "independent_heldout": True,
+              "identity": weekly.identity(cfg), "runtime": runtime, "independent_heldout": False,
+              "input_independence_asserted": fixture.get("independent_heldout") is True,
+              "independence_verified": False, "label_provenance": fixture.get("label_provenance", "unspecified"),
               "languages": {lang: dict(counts) for lang, counts in languages.items()},
               "span_kinds": {kind: dict(counts) for kind, counts in kinds.items()},
               "model_calls": calls, "seconds": elapsed, "fixture_scope": fixture.get("scope", "unspecified"),
@@ -258,6 +260,8 @@ def main():
     parser.add_argument("--llama-server", type=Path, required=True)
     parser.add_argument("--server-pid", type=int, required=True)
     parser.add_argument("--api-key-file", type=Path)
+    parser.add_argument("--allow-unauthenticated", action="store_true",
+                        help="explicit local-only diagnostic exception; private runs require API key by default")
     parser.add_argument("--base-url", default="http://127.0.0.1:18081/v1")
     parser.add_argument("--source", type=Path)
     parser.add_argument("--source-content-sha256")
@@ -271,6 +275,8 @@ def main():
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--fixture-sha256")
     args = parser.parse_args()
+    if args.api_key_file is None and not args.allow_unauthenticated:
+        parser.error("private local review requires a mode-0600 API-key file")
     cfg = weekly.config(args.config)
     runtime = verify_server(cfg, args.model_file, args.llama_server, args.server_pid, args.base_url, args.api_key_file)
     if args.command == "propose":

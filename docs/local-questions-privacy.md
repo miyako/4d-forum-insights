@@ -24,13 +24,16 @@ port, starts only its own PID and stops only that PID. It sets `--offline`,
 `--no-webui`, `--log-disable`, context 16384 and one slot. Its private startup log
 stays local; request/prompt/response text is never printed/uploaded.
 
-Set `LLAMA_SERVER` and `GEMMA_MODEL_FILE` to verified absolute paths. Optional
-`PRIVACY_API_KEY_FILE` must be a current-user-owned regular **0600** file containing
+Set `LLAMA_SERVER` and `GEMMA_MODEL_FILE` to verified absolute paths.
+Private runs require `PRIVACY_API_KEY_FILE`, a current-user-owned regular **0600** file containing
 one local API key. Its value is read only by the local client/server, never printed
 or passed on the command line. No OpenAI/Copilot credential is used. The local tool
 also verifies model file hash, binary/runtime, owned server PID's model/alias/context/
 port arguments and local `/models` alias before sending any identity text. The
 existing Kev server cannot pass these checks merely by occupying a loopback port.
+`PRIVACY_ALLOW_UNAUTHENTICATED=1` is an explicit local diagnostic exception only;
+the standalone client likewise requires `--allow-unauthenticated` if no key file
+is supplied. The source owner's private review policy uses authenticated mode.
 
 ## Bounded existing-candidate proposals
 
@@ -77,9 +80,9 @@ even empty spans and regex passes are proposals, not independent review. A separ
 source-linked local review must verify privacy and retained technical meaning before
 corrected output is promoted into exact-hash translation/publication clearance.
 
-## Held-out synthetic evaluation
+## Synthetic challenge evaluation and independence
 
-Create the deterministic 27-case EN/FR/JA planted-PI fixture outside the worktree:
+Create the deterministic 27-case EN/FR/JA planted-PI challenge fixture outside the worktree:
 
 ```sh
 uv run --project pipeline python scripts/questions_privacy_fixture.py --out /private/gold.json
@@ -92,10 +95,14 @@ bash pipeline/ci/run-questions-privacy-local.sh evaluate \
 The fixture has explicit offsets for planted personal names, accents/Japanese,
 emails, phones, user paths, accounts, addresses and full-width usernames; negative
 cases contain 4D versions/APIs/commands and public product documentation URLs.
-The gold format is `questions-local-pi-gold-v1`, with `independent_heldout:true`
+The gold format is `questions-local-pi-gold-v1`, with `independent_heldout:false`
 and cases `{id,lang,text,posts,expected_spans}`. Each span has exact
 `{start,end,text,kind}`. Real held-out inputs must be independently labeled
-on device; prior detector-selected AI findings/corrections are biased challenge
+on device. The generated fixture was authored in the same implementation stream
+as the detector; separation from prompt tuning does **not** establish independent
+authoring/labeling. The measurement explicitly records input assertions but keeps
+`independent_heldout:false` / `independence_verified:false`: a supplied boolean is
+not proof. Prior detector-selected AI findings/corrections are biased challenge
 cases, not independent corpus-recall labels.
 
 The evaluation writes private per-case/per-language/per-span-kind identifier counts,
