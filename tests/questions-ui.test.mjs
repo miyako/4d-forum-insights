@@ -169,6 +169,55 @@ test('expanded public approval uses a distinct incomplete-corpus schema and exac
   }
 });
 
+test('complete public snapshot is distinct, opt-in and strips private provenance', () => {
+  const entries = [row(1), row(2)];
+  entries[0].answers.version_dependent = { noul: .2 };
+  entries[1].answers.version_dependent = { noul: .7 };
+  entries[1].answers.has_question.noul = .49;
+  for (const entry of entries) {
+    entry.evidence_warnings = [];
+    entry.decision_model = 'private runtime';
+    entry.decision_version = 'private prompt';
+  }
+  entries[0].answers.domain_network.noul = .9;
+  entries[0].domains = ['untrusted'];
+  const source = { ...publicData(), schema_version: 'questions-ui-public-complete-v1', entries,
+    snapshot_scope: 'processed', processed_count: 2, eligible_question_count: 1,
+    corpus_total: 2, corpus_complete: true, source_selected_at: '2026-11-12T04:16:20Z' };
+  const validated = validatePublicPreview(source);
+  assert.equal(validated.entries.length, 2);
+  assert.deepEqual(validated.entries[0].answers, entries[0].answers);
+  assert.deepEqual(validated.entries[0].domains, ['coding', 'network']);
+  assert.deepEqual(validated.entries[1].domains, ['coding']);
+  assert.deepEqual(validatePublicPreview(validated), validated);
+  assert.equal(Object.hasOwn(validated.entries[0], 'decision_model'), false);
+  assert.equal(Object.hasOwn(validated.entries[0], 'decision_version'), false);
+  for (const change of [{ corpus_complete: false }, { processed_count: 1 }, { corpus_total: 3 },
+    { eligible_question_count: 2 }, { source_selected_at: 'invalid' }, { source_selected_at: '2026-11-12' }]) {
+    assert.throws(() => validatePublicPreview({ ...source, ...change }));
+  }
+  const malformed = structuredClone(source);
+  delete malformed.entries[0].answers.version_dependent;
+  assert.throws(() => validatePublicPreview(malformed), /version probability/);
+  malformed.entries[0].answers.version_dependent = { noul: .2 };
+  malformed.entries[0].evidence_warnings = ['private evidence'];
+  assert.throws(() => validatePublicPreview(malformed), /warnings/);
+  mkdirSync('build', { recursive: true });
+  const temp = mkdtempSync(resolve('build/questions-complete-test-'));
+  try {
+    writeFileSync(resolve(temp, 'source.json'), JSON.stringify(source));
+    writeFileSync(resolve(temp, 'manifest.json'), JSON.stringify({ questions: [{ id: 'fr' }] }));
+    assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp), /not enabled/);
+    installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true });
+    const manifest = JSON.parse(readFileSync(resolve(temp, 'manifest.json')));
+    assert.equal(manifest.questions_view.corpus_complete, true);
+    assert.equal(manifest.questions_view.semantic_enabled, false);
+    assert.equal(manifest.questions_view.enabled, false);
+    assert.equal(manifest.questions_view.source_selected_at, source.source_selected_at);
+    assert.deepEqual(manifest.questions, [{ id: 'fr' }]);
+  } finally { rmSync(temp, { recursive: true }); }
+});
+
 test('public sample install preserves Requests and independent preview/full/semantic rollout gates', () => {
   mkdirSync('build', { recursive: true });
   const temp = mkdtempSync(resolve('build/questions-public-test-'));
@@ -222,10 +271,27 @@ test('private adapter and staging retain Requests schema and never write private
   } finally { rmSync(temp, { recursive: true }); }
 });
 
-for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public', 'processed', 'public-processed'])
+test('complete private corpus candidates retain scope without granting publication', () => {
+  const entries = [row(1), row(2, { answers: { ...row().answers, has_question: { noul: .1 } } })];
+  const candidate = {
+    schema_version: 'questions-ui-private-preview-v1', version: 1, private_preview: true, publish_allowed: false,
+    generated_at: '2026-11-21T00:00:00Z', snapshot_scope: 'processed', processed_count: 2, eligible_question_count: 1,
+    corpus_total: 2, corpus_complete: true, entries,
+  };
+  const result = adaptPreview(candidate);
+  assert.equal(result.corpus_complete, true);
+  assert.equal(result.publish_allowed, false);
+  assert.equal(result.entries.length, 2);
+  for (const change of [{ generated_at: 'invalid' }, { processed_count: 1 }, { processed_count: undefined }, { eligible_question_count: 2 }, { corpus_total: 3 },
+    { corpus_complete: false }, { corpus_total: 1 }]) {
+    assert.throws(() => adaptPreview({ ...candidate, ...change }), /processed snapshot counts/);
+  }
+});
+
+for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', 'public', 'processed', 'public-processed', 'complete', 'public-complete'])
   for (const translation of locale === 'en' ? ['missing'] : ['missing', 'current', 'stale'])
     test(`actual Questions module renders ${locale} ${publication} ${translation} with escaped summaries, filters, metadata, locale and state links`, async () => {
-  const isPublic = publication.startsWith('public'), isProcessed = publication.endsWith('processed');
+  const isPublic = publication.startsWith('public'), isProcessed = publication.endsWith('processed') || publication.endsWith('complete');
   const elements = new Map();
   const events = new Map();
   const element = () => ({
@@ -251,7 +317,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   const context = {
     ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure, loadOverlay,
     installLocale: (i18n, page) => installLocale(i18n, page, document, location),
-    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: 5, preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
+    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: publication.endsWith('complete') ? 3 : 5, corpus_complete: publication.endsWith('complete'), source_selected_at: '2026-11-12T04:16:20Z', preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
     getJSON: async (file) => file.startsWith('locales/') ? {
       version: 1, page: 'questions', locale, entries: translation === 'missing' ? {} : {
         1: { source_hash: translation === 'stale' ? '0'.repeat(64) : sourceHash({ title: row().title, body: row().body }),
@@ -272,14 +338,18 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   vm.runInNewContext(source + '\nglobalThis.ready = init(); globalThis.api = { app, update, controls, searchSemantic };', context);
   await context.ready;
   assert.equal(context.api.app.ready, true);
-  const banner = publication === 'public-processed'
+  const banner = publication === 'public-complete'
+    ? 'Complete frozen snapshot, source selected {date}: {count} records, {questions} eligible questions. This is not the current forum; model assessments are unreviewed and semantic search is disabled.'
+    : publication === 'public-processed'
     ? 'Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.'
     : publication === 'public'
     ? 'Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.'
+    : publication === 'complete'
+    ? 'Private complete snapshot: {count} records, {questions} eligible questions. Review is required; nothing here is published.'
     : publication === 'processed'
     ? 'Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.'
     : 'Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.';
-  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: isProcessed ? '3' : '1', questions: '2', total: '5' }));
+  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: isProcessed ? '3' : '1', questions: '2', total: '5', date: '2026-11-12T04:16:20Z' }));
   assert.equal(context.api.app.items.length, isProcessed ? 2 : 1);
   if (locale !== 'en') assert.equal(get('#translation-coverage').textContent,
     createLocale(locale).t('{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', {

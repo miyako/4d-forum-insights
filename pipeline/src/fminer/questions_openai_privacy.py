@@ -26,17 +26,14 @@ VERSION = "questions-openai-spans-v1-" + privacy.digest(
      MODEL_PATTERN, "gpt-6-luna:low"])[:12]
 
 
-def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
-    if not isinstance(model, str) or not re.fullmatch(MODEL_PATTERN, model):
-        raise ValueError("explicit supported OpenAI redaction model ID required")
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not key:
-        raise ValueError("OpenAI redaction API key required")
+def check_text(text):
     if not isinstance(text, str) or len(text) > 12000:
         raise privacy.ProposalError("display_context_bound")
-    # Known secrets must never enter a hosted request, even for redaction.
     if any(re.search(PATTERNS[kind], text, re.IGNORECASE) for kind in ("credential", "token")):
         raise privacy.ProposalError("credential_in_display")
+
+
+def identity_hints(text, posts, op_username=None):
     normalized = unicodedata.normalize("NFKC", text).casefold()
     extra = [op_username] if op_username else []
     candidates = {p["user"] for p in posts} | set(extra) | forbidden_names(posts, usernames=extra)
@@ -52,14 +49,27 @@ def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
     if any(re.search(PATTERNS[kind], hint, re.IGNORECASE)
            for hint in identities for kind in ("credential", "token")):
         raise privacy.ProposalError("credential_in_hint")
+    return identities
+
+
+def complete(system, data, schema, model, validate, timeout=120, attempts=2):
+    if not isinstance(model, str) or not re.fullmatch(MODEL_PATTERN, model):
+        raise ValueError("explicit supported OpenAI model ID required")
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        raise ValueError("OpenAI API key required")
+    if timeout <= 0 or type(attempts) is not int or not 1 <= attempts <= 2:
+        raise ValueError("invalid OpenAI request bounds")
+    content = json.dumps(data, ensure_ascii=False)
+    if len(content) > 32000:
+        raise privacy.ProposalError("review_context_bound")
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": privacy.SYSTEM},
-                     {"role": "user", "content": json.dumps(
-                         {"text": text, "private_identity_hints": identities}, ensure_ascii=False)}],
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": content}],
         "max_completion_tokens": 2400,
         "response_format": {"type": "json_schema", "json_schema": {
-            "name": "pi_spans", "strict": True, "schema": SCHEMA}},
+            "name": "display_review", "strict": True, "schema": schema}},
     }
     if model == "gpt-6-luna":
         payload["reasoning_effort"] = "low"
@@ -101,15 +111,13 @@ def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
                 if choice["finish_reason"] != "stop" or choice["message"].get("refusal"):
                     raise privacy.ProposalError("incomplete_or_refused")
                 result = json.loads(choice["message"]["content"])
-                cleared, spans = privacy.resolve_proposals(text, result)
-                if privacy.findings(cleared, posts, op_username):
-                    raise privacy.ProposalError("residual_identifiers")
+                validated = validate(result)
                 if not isinstance(response_usage, dict) or any(type(response_usage.get(k)) is not int
                                                                or response_usage[k] < 0 for k in usage):
                     raise privacy.ProposalError("usage_missing")
-                return cleared, {"response_hash": privacy.digest(result), "spans": spans, "model_calls": calls,
-                                 "original_hash": privacy.digest(text), "display_hash": privacy.digest(cleared),
-                                 "usage": usage, "usage_unreported_calls": calls - usage_reported_calls}
+                return validated, {"response_hash": privacy.digest(result), "model": model,
+                                   "model_calls": calls, "usage": usage,
+                                   "usage_unreported_calls": calls - usage_reported_calls}
             except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as error:
                 reason = getattr(error, "reason", "response_or_transport")
                 if isinstance(error, httpx.TimeoutException):
@@ -120,3 +128,20 @@ def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
     failure.usage = usage
     failure.usage_unreported_calls = calls - usage_reported_calls
     raise failure
+
+
+def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
+    check_text(text)
+    hints = identity_hints(text, posts, op_username)
+
+    def validate(result):
+        cleared, spans = privacy.resolve_proposals(text, result)
+        if privacy.findings(cleared, posts, op_username):
+            raise privacy.ProposalError("residual_identifiers")
+        return cleared, spans
+
+    (cleared, spans), audit = complete(
+        privacy.SYSTEM, {"text": text, "private_identity_hints": hints}, SCHEMA, model,
+        validate, timeout, attempts)
+    audit.update(spans=spans, original_hash=privacy.digest(text), display_hash=privacy.digest(cleared))
+    return cleared, audit

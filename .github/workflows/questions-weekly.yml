@@ -69,7 +69,6 @@ jobs:
         id: publish
         env:
           PUBLICATION_ENABLED: ${{ vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED }}
-          REVIEW_SHA256: ${{ vars.QUESTIONS_WEEKLY_PUBLICATION_REVIEW_SHA256 }}
         run: |
           uv run --project pipeline python scripts/questions_weekly_publish.py
           echo "published=true" >> "$GITHUB_OUTPUT"
@@ -78,7 +77,7 @@ jobs:
         if: always()
         run: |
           echo '### Weekly Questions' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Local Kev and enrichment; OpenAI redaction receives minimized display text and matching identity hints, translation receives only reviewed text. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Local Kev and enrichment; OpenAI redaction and separate independent review receive minimized display text and matching identity hints. Only reviewed English enters translation; FR/JA receive independent meaning/privacy checks. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Check failing step for readiness, model, checkpoint or publication-review blockers; no deployment occurs on a failed gate.' >> "$GITHUB_STEP_SUMMARY"
 
   pages:

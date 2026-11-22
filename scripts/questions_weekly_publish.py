@@ -13,15 +13,25 @@ import sys
 
 import publish_data as publisher
 import questions_weekly as weekly
+import questions_weekly_review as independent
 
 
 def publication_review(root, cfg, expected_review_sha256):
     root = Path(root)
-    weekly.readiness(root, cfg)
+    gate = weekly.readiness(root, cfg)
     review_path = root / "publication-review.json"
-    if not expected_review_sha256 or weekly.corpus.file_hash(review_path) != expected_review_sha256:
+    if expected_review_sha256 and weekly.corpus.file_hash(review_path) != expected_review_sha256:
         raise ValueError("independently verified weekly publication review SHA-256 is required")
     review = json.loads(review_path.read_text())
+    if expected_review_sha256 is None:
+        if (gate.get("automated_review_authorized") is not True
+                or gate.get("weekly_publication_authorized") is not True
+                or review.get("automated_review_version") != weekly.independent_review.VERSION
+                or review.get("english_reviews_sha256") != weekly.corpus.file_hash(root / "reviews.json")
+                or review.get("translation_reviews_sha256") != weekly.corpus.file_hash(root / "translation-reviews.json")):
+            raise ValueError("automatic publication requires independently checked current review proofs")
+    elif not re.fullmatch(r"[a-f0-9]{64}", expected_review_sha256):
+        raise ValueError("invalid publication review SHA-256")
     if (review.get("schema") != "questions-weekly-publication-review-v1"
             or review.get("identity") != weekly.identity(cfg)
             or any(review.get(key) is not True for key in
@@ -50,7 +60,7 @@ def publication_review(root, cfg, expected_review_sha256):
     return review
 
 
-def publish(root, cfg, review_sha256):
+def publish(root, cfg, review_sha256=None):
     root = Path(root)
     if os.environ.get("PUBLICATION_ENABLED") != "true":
         raise ValueError("weekly publication readiness is OFF; encrypted progress retained, nothing published")
@@ -60,12 +70,20 @@ def publish(root, cfg, review_sha256):
         raise ValueError("reviewed complete Questions UI/Pages dependency is not installed/enabled")
     gh = publisher.GitHub()
     with gh.lease():
-        review = publication_review(root, cfg, review_sha256)
         # Validate against the current durable source under the same lease as public asset CAS.
         with publisher.workspace() as temp:
             source = temp / "forum.db"
             subprocess.run(["scripts/db-store.sh", "pull", str(source)], check=True,
                            stdout=subprocess.DEVNULL)
+            if review_sha256 is None:
+                live = temp / "reviewed-live-base"
+                live.mkdir()
+                gh.release("download", "data", "--pattern", "questions-preview.json", "--dir", str(live))
+                live_path = live / "questions-preview.json"
+                if publisher.read_public_questions(live_path).get("corpus_complete") is not True:
+                    raise ValueError("automatic weekly publication requires the initial complete live release")
+                independent.authorize_publication(source, root, cfg, weekly.corpus.file_hash(live_path))
+            review = publication_review(root, cfg, review_sha256)
             with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
                 con.row_factory = sqlite3.Row
                 topics = con.execute("SELECT * FROM topics ORDER BY id").fetchall()
@@ -89,6 +107,9 @@ def publish(root, cfg, review_sha256):
                             "--require-complete", "--data", str(root / "embedding"), "--store", str(root / "portable-locales"),
                             "--report", "build/questions-publication-locales.json"], check=True,
                            stdout=subprocess.DEVNULL)
+            if review_sha256 is None:
+                subprocess.run(["python3", "scripts/questions_weekly_store.py", "push", str(root)], check=True,
+                               stdout=subprocess.DEVNULL, env={**os.environ, "DATA_PUBLICATION_CHILD": "1"})
             # Public normalization, complete-locale enforcement and live-preview CAS are owned by the publisher.
             publisher.publish_questions_preview(
                 gh, "data", root / "publication/public-preview.json", root / "portable-locales", temp,

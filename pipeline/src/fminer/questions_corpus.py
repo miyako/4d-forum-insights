@@ -270,7 +270,8 @@ def safe_error(error):
     return f"{type(error).__name__}: {detail} (private response details withheld)"
 
 
-def classify(con, base_url, model, revision, limit=None, budget_minutes=None, topic_ids=None, log=print):
+def classify(con, base_url, model, revision, limit=None, budget_minutes=None, topic_ids=None, log=print,
+             expected_model=None):
     if not get_state(con, "source"):
         raise ValueError("prepare the explicit all-language source scope first")
     if not revision.strip():
@@ -283,6 +284,8 @@ def classify(con, base_url, model, revision, limit=None, budget_minutes=None, to
     # A single writer/worker retains the full 16k server context and predictable memory use.
     decider = CorpusDecider(base_url, model)
     model_id = decider.model_id()
+    if expected_model is not None and model_id != expected_model:
+        raise ValueError("Decision server model identity does not match the checkpoint")
     set_state(con, "runtime", {"model": model_id, "revision": revision, "prompt": PROMPT_VERSION,
                              "evidence": EVIDENCE_VERSION, "workers": 1, "base_url": base_url})
     con.execute(

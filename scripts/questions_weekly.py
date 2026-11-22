@@ -19,6 +19,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline/src"))
 from fminer import db, enrich, questions, questions_corpus as corpus, questions_privacy as privacy
 from fminer import questions_openai_privacy as openai_privacy
+from fminer import questions_openai_review as independent_review
 from fminer.questions_export import WARNING_TEXT, _bool_or_none
 from fminer.scrape import split_raw
 import publish_data as publisher
@@ -36,6 +37,12 @@ CREATE TABLE IF NOT EXISTS display_fields (
  completion_tokens INTEGER NOT NULL DEFAULT 0, usage_unreported_calls INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(topic_id,field)
 );
+CREATE TABLE IF NOT EXISTS review_fields (
+ topic_id INTEGER NOT NULL, field TEXT NOT NULL, locale TEXT NOT NULL,
+ binding TEXT NOT NULL, outcome TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+ audit TEXT, error TEXT,
+ PRIMARY KEY(topic_id,field,locale)
+);
 """
 
 
@@ -48,7 +55,7 @@ def config(path):
 
 
 def identity(cfg):
-    return privacy.digest([cfg, openai_privacy.VERSION, privacy.RULE_VERSION,
+    return privacy.digest([cfg, openai_privacy.VERSION, independent_review.VERSION, privacy.RULE_VERSION,
                            corpus.PROMPT_VERSION, corpus.EVIDENCE_VERSION])
 
 

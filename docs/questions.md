@@ -732,3 +732,317 @@ and zero model calls**, with no stale/missing overlays. These are translation-co
 claim that the 17,042-topic corpus is finished or that publication/privacy review has automatically passed.
 Browser overlay preparation strips private per-field provenance even for local review; the durable store
 and independent private backup retain it for finalization and merge-based recovery.
+
+## Preparing the eventual Questions update pipeline
+
+The corpus classifier and its exact `questions-e5` / `questions-corpus-e3` evidence versions are available
+in this repository. Questions is not connected to the weekly delta. A separate checkpoint workflow is
+disabled by default; development and private staging do not authorize a classifier restart, model calls,
+or publication.
+
+Before an authorized continuation, make independent, standalone SQLite backups of both the frozen source
+and ratings databases. The following read-only preflight requires those backups, rejects WAL sidecars,
+and checks source membership/content, every evidence fingerprint and saved decision, unfinished attempts,
+and the exact existing model, revision, prompt and evidence versions. Decisions whose evidence has changed
+are reported as `stale`, not current; incompatible model or prompt provenance is rejected:
+
+```sh
+uv run -q --project pipeline python -m fminer.questions_preflight \
+  --source /private/source-snapshot.db --ratings /private/ratings-snapshot.db \
+  --model "$QUESTIONS_MODEL" --revision "$QUESTIONS_MODEL_REVISION"
+```
+
+The caller must independently verify that the actual runtime and weights match the requested revision.
+Preflight does not acquire a distributed lock, prove the original databases have no writers, authorize
+inference, or make a changed source snapshot safe to prepare. Preserve independent backups and establish
+exclusive ownership and a durable checkpoint/lease protocol before connecting Questions to automation.
+
+An explicitly approved new standalone source can be prepared without changing either old input:
+
+```sh
+uv run -q --project pipeline python scripts/questions_transition.py \
+  --source /private/source-snapshot.db --ratings /private/ratings-snapshot.db \
+  --new-source /private/new-source-snapshot.db --approved-source-sha256 VERIFIED_SOURCE_SHA256 \
+  --output /private/new-transition-directory \
+  --model "$QUESTIONS_MODEL" --revision "$QUESTIONS_MODEL_REVISION"
+```
+
+The output contains the prepared source and ratings plus the previous snapshots. Lost topic IDs, changed
+attempt history, incompatible provenance and replacement of unchanged current decisions fail closed.
+Review the changed-source and stale counts before authorizing any reclassification; the hash binds the
+specific approved source but is not itself an authorization.
+
+For private checkpoint preservation, `questions_save_checkpoint.py` preflights standalone snapshots,
+encrypts them with scrypt-derived AES-256-GCM using `DB_KEY`, independently decrypts and verifies them,
+and creates a new file without overwriting an existing checkpoint:
+
+```sh
+uv run -q --project pipeline python scripts/questions_save_checkpoint.py \
+  --source /private/source-snapshot.db --ratings /private/ratings-snapshot.db \
+  --model "$QUESTIONS_MODEL" --revision "$QUESTIONS_MODEL_REVISION" \
+  --output /private/new-checkpoint.enc
+```
+
+`questions_checkpoint_store.py` implements an **opt-in** encrypted release-asset protocol and must not be
+used without authorization. `capture` records the release
+asset IDs, sizes and ciphertext hashes under the shared publication lease. `commit` authenticates both
+checkpoints, checks existing decisions and attempt history, requires the candidate source to match
+the captured forum database, preserves and re-downloads a hash-named encrypted backup, rechecks both
+assets, then uploads and verifies the new encrypted asset. Initial seeding requires `capture --initial`
+and `commit --seed-sha256` with the independently approved encrypted seed hash. If a replacement is
+interrupted, a missing checkpoint cannot be reseeded while backups exist: after investigation,
+`recover --backup-sha256 VERIFIED_HASH --model ... --revision ... --private-dir /private/work`
+restores the verified backup only when the checkpoint asset is absent. Capture and recovery work
+directories must be owner-only and on encrypted-at-rest storage; a hard-killed process can leave
+private temporary SQLite files there.
+
+This is a cooperative lease and compare-before-write protocol, **not an atomic GitHub asset CAS**.
+Non-cooperating writers and interrupted uploads require operator investigation; preserve independent
+backups. Release assets are public even though the checkpoint is encrypted. Keep `DB_KEY` secret and
+never upload plaintext snapshots or private candidate/audit files. A verified historical runtime,
+reviewed seed and source-transition policy are still required before enabling automatic classification.
+The full-snapshot contract described below is prepared but disabled and does not constitute approval.
+
+### Disabled checkpoint workflow
+
+`.github/workflows/questions-update.yml` schedules a bounded checkpoint update on Tuesdays at 00:17 UTC
+and supports manual dispatch. The job does nothing unless the repository variable
+`QUESTIONS_AUTOMATION_ENABLED` is explicitly set to `true`; setting that variable requires separate
+authorization. It runs only default-branch code on a dedicated `self-hosted, questions-private` runner.
+It does not publish site data, translate content, deploy Pages, or restart another classifier.
+
+Before activation, independently verify and seed the checkpoint and restore the original compatible
+patched runtime. Prepare a reviewed runtime manifest containing exactly:
+
+```json
+{
+  "schema_version": "questions-runtime-v1",
+  "model": "EXACT_CHECKPOINT_MODEL_ID",
+  "revision": "EXACT_CHECKPOINT_RUNTIME_REVISION",
+  "server_sha256": "VERIFIED_SERVER_SHA256",
+  "weights_sha256": "VERIFIED_WEIGHTS_SHA256",
+  "prompt": "questions-corpus-p1-68290b6c",
+  "evidence": "questions-corpus-e3"
+}
+```
+
+Configure `QUESTIONS_RUNTIME_MANIFEST`, its independently approved `QUESTIONS_RUNTIME_SHA256`,
+`QUESTIONS_SERVER_PATH`, `QUESTIONS_WEIGHTS_PATH`, and `QUESTIONS_PRIVATE_DIR` as repository variables;
+the runner needs the existing `DB_KEY` secret, `gh`, OpenSSL, zstd, and the dependencies installed by the
+workflow. The private directory must be owner-only, outside the checkout and runner temporary directory,
+on encrypted-at-rest storage protected from other users. Treat it and the runner as private-data infrastructure: do not
+run untrusted jobs on it. A hard-killed job may leave plaintext SQLite files there; inspect and remove
+only that run's private temporary directory before reusing the runner.
+
+The server and weights are hashed before and after the batch. The runner starts its own loopback server
+with one worker and verifies the server-reported model ID against the checkpoint before inference. The
+manifest hash and matching model label do not themselves establish trusted runtime provenance; the
+historical binary, build and weights must be independently verified first. Batch size and time are
+bounded by `QUESTIONS_BATCH_LIMIT` (default 100, maximum 1000) and `QUESTIONS_BATCH_MINUTES` (default
+120, maximum 240). The inference deadline interrupts a slow request and records the interrupted or failed
+attempt; startup, checkpointing and cleanup occur outside that budget.
+
+Each run compares the encrypted forum and Questions checkpoint asset IDs and hashes under the shared
+lease. A new forum source is prepared only in a private copy; deleted prior topic IDs fail closed.
+`QUESTIONS_MAX_STALE` and `QUESTIONS_MAX_NEW` bound newly invalidated current decisions (including
+newly blocked decisions) and newly added topics when the source changes; both default to zero. Set these
+only after approving that source-transition policy. Matching
+decisions and attempt history are preserved, and a no-change run starts no model and uploads nothing.
+Failed decision attempts are checkpointed before the job fails. If the forum or checkpoint changes
+concurrently, the upload is rejected and the encrypted `candidate.enc` is retained in the private run
+directory for explicit recovery; it is never uploaded as an Actions artifact. Reconcile it against a
+fresh forum snapshot and checkpoint before attempting another upload. A hard cancellation or runner loss
+can still interrupt a batch before an encrypted candidate is saved; independent backups remain essential.
+
+The private preview adapter accepts the source owner's processed-snapshot contract, including an explicit
+complete/incomplete count, while retaining `private_preview:true` and `publish_allowed:false`. A complete
+private snapshot remains subject to source-linked privacy review, translation review and separately
+authorized publication; it is not an approved production export.
+
+The source-owned exporter accepts coherent standalone source/ratings backups and a separately verified
+approved preview baseline. It produces a new mode-0700 directory containing a private `candidate.json`
+and `audit.json`; it makes no model calls and does not publish:
+
+```sh
+uv run -q --project pipeline python scripts/questions_export.py \
+  --source /private/source-snapshot.db --ratings /private/ratings-snapshot.db \
+  --baseline /private/approved-questions-preview.json --baseline-sha256 VERIFIED_SHA256 \
+  --output /private/new-export-directory
+node scripts/questions_local_preview.mjs \
+  --source /private/new-export-directory/candidate.json --audit /private/new-export-directory/audit.json \
+  --data build/questions-preview-base/data --store localization
+```
+
+The staging adapter verifies the exact candidate bytes and counts against its audit, but the audit is
+not privacy approval. All relevant display text and findings require independent source-linked review,
+including previously approved text and later translations. Record whether review was AI-assisted and
+its limitations; do not describe it as human review unless a human actually performed it. The exporter
+preserves baseline title/body strings, including reviewed redactions;
+new text uses fresh existing English enrichment. A complete candidate means complete for the selected
+snapshot, not necessarily the current forum or authorization to deploy.
+
+The same offline preflight, export and private staging can be run together:
+
+```sh
+uv run -q --project pipeline python scripts/questions_prepare_review.py \
+  --source /private/source-snapshot.db --ratings /private/ratings-snapshot.db \
+  --baseline /private/approved-questions-preview.json --baseline-sha256 VERIFIED_SHA256 \
+  --data build/questions-preview-base/data --store localization \
+  --model "$QUESTIONS_MODEL" --revision "$QUESTIONS_MODEL_REVISION" \
+  --output build/questions-review
+```
+
+The output directory must be new, isolated from inputs, and directly or indirectly under `build/`.
+It is private (mode 0700), binds the generated candidate to its audit and checked snapshots, and
+contains a local-only preview and a no-model FR/JA coverage report. It never starts a model or updates
+the release. A failed run can leave
+private partial artifacts in that directory for inspection; do not treat them as a completed candidate.
+
+Alternatively, supply `--checkpoint /private/candidate.enc --checkpoint-sha256 VERIFIED_SHA256` in
+place of `--source` and `--ratings`. This authenticates and temporarily unpacks the encrypted checkpoint
+using `DB_KEY`, checks its hash again, and reports the checkpoint hash alongside the private review.
+The source-linked privacy and translation reviews, and a separately agreed public contract and approval,
+remain mandatory; neither this command nor the scheduled checkpoint job promotes anything publicly.
+
+After an independent source-linked privacy review **and explicit authorization to send this exact
+candidate to OpenAI**, the reviewer can supply a separate private clearance file:
+
+```json
+{
+  "schema_version": "questions-private-translation-clearance-v1",
+  "candidate_sha256": "REVIEWED_CANDIDATE_SHA256",
+  "audit_sha256": "REVIEWED_AUDIT_SHA256",
+  "source_linked_privacy_review": true,
+  "openai_translation_authorized": true,
+  "reviewer": "REVIEWER",
+  "reviewed_at": "2026-11-21T00:00:00Z"
+}
+```
+
+The operator must independently verify the review, its provenance and the clearance hash; this file is
+an assertion, not proof that review occurred. Automated scans alone are not review. Create a new empty,
+owner-only review directory on encrypted-at-rest storage, then run a bounded private translation:
+
+```sh
+node scripts/questions_translate_review.mjs \
+  --candidate build/questions-review/candidate/candidate.json \
+  --audit build/questions-review/candidate/audit.json \
+  --clearance /private/review-clearance.json --clearance-sha256 VERIFIED_CLEARANCE_SHA256 \
+  --store /private/questions-review-store --seed-store /private/durable-localization \
+  --model "$OPENAI_MODEL" --entries 100 --minutes 20
+```
+
+This verifies the exact candidate and audit against the independently supplied clearance, reconstructs
+translation input from that candidate rather than trusting a mutable preview, and copies the seed store
+under its cooperative lock without modifying it. The copy is hash-verified before use. To resume this
+candidate, reuse the review store without `--seed-store`; a different candidate requires a new review
+store. It sends only approved generated title/body text to OpenAI. Keep the store on
+encrypted-at-rest storage: a hard-killed process can leave its private temporary input there. Results
+remain private, require translation review, and do not authorize publication. A changed candidate or
+audit requires new clearance; never replace the fuller durable store with a preview-only copy.
+
+For an independently reviewed public preview, the following optional, local-only
+preflight binds all exact artifacts to a separate publication review record:
+
+```json
+{
+  "schema_version": "questions-private-publication-review-v1",
+  "candidate_sha256": "REVIEWED_PRIVATE_CANDIDATE_SHA256",
+  "audit_sha256": "REVIEWED_PRIVATE_AUDIT_SHA256",
+  "preview_sha256": "REVIEWED_PUBLIC_PREVIEW_SHA256",
+  "fr_sha256": "REVIEWED_FRENCH_OVERLAY_SHA256",
+  "ja_sha256": "REVIEWED_JAPANESE_OVERLAY_SHA256",
+  "source_linked_privacy_review": true,
+  "translation_review": true,
+  "publication_authorized": true,
+  "reviewer": "REVIEWER",
+  "reviewed_at": "2026-11-21T00:00:00Z",
+  "expected_current_preview_sha256": "INDEPENDENTLY_VERIFIED_LIVE_PREVIEW_SHA256"
+}
+```
+
+```sh
+node scripts/questions_publication_preflight.mjs \
+  --candidate /private/candidate.json --audit /private/audit.json --preview /private/public-preview.json \
+  --fr /private/fr/questions.json --ja /private/ja/questions.json \
+  --clearance /private/publication-review.json --clearance-sha256 VERIFIED_REVIEW_SHA256
+```
+
+This checks the private audit, exact preview membership and decision metadata, both source-bound
+translation overlays, and the reviewed artifact hashes. Reviewed title/body redactions are allowed.
+It does not contact GitHub, verify the live preview, authenticate the reviewer, generate a public
+candidate, or publish anything. An operator must independently verify the review and live preview;
+the existing publisher must recheck the expected live hash under its lease after separate authorization.
+The existing partial public preview contract continues to reject complete corpora. The separate complete
+snapshot contract below is not enabled by this preflight.
+
+### Complete frozen-snapshot contract (disabled)
+
+`questions-ui-public-complete-v1` is a separate, proposed public **preview**, not a claim that the
+live forum is complete. It uses `version:1`, `public_preview:true`, `private_preview:false`,
+`publish_allowed:true`, `representative:false`, `snapshot_scope:"processed"`, `corpus_complete:true`,
+`processed_count == corpus_total == entries.length`, and an exact `eligible_question_count` at the
+existing question threshold. `source_selected_at` is the independently verified ISO timestamp when the
+frozen source was selected for the corpus, not the snapshot capture time or a per-topic freshness claim.
+All source members, including nonquestions, remain present. The page labels the frozen date in English,
+French and Japanese, retains unreviewed decision disclaimers, and keeps semantic search disabled.
+
+The public validator preserves the 15 decision axes and distributions, nullable solved/closed/reply
+metadata, and the known evidence-warning allowlist; it strips private runtime/prompt fields and other
+non-allowlisted fields. Complete snapshots also derive `domains` in UI order from the independent domain
+probabilities at the inclusive 0.6 threshold; provided domain arrays are never trusted. Compare previously
+approved rows against the **validator-normalized** baseline, accounting for this derived field,
+not the raw private export; source-linked audits and provenance remain private. Any reviewed redactions
+change translation source hashes and must be reflected in the reviewed FR/JA overlays.
+
+`config/questions-preview.json` retains the existing preview setting and defaults `complete_enabled` to
+false. Pages refuses a complete snapshot while that gate is off. The publisher separately requires
+`--allow-complete` and an enabled complete gate, a reviewed expected current-preview hash, and complete,
+source-hash-matching French and Japanese overlays. It refuses to replace a complete snapshot with a
+partial preview. These checks do not prove review, authorize model calls or authorize release/deployment.
+The source owner must still produce and review the private candidate, reconcile baseline and timestamps,
+and record independent source-linked privacy and translation review bound to exact artifacts before
+any separately authorized activation or publication.
+
+After the source-linked review and independently verified translation clearance above, stage the
+complete public-shaped preview in an existing owner-only private directory:
+
+```sh
+node scripts/questions_build_complete_preview.mjs \
+  --candidate /private/candidate.json --audit /private/audit.json \
+  --clearance /private/review-clearance.json --clearance-sha256 VERIFIED_CLEARANCE_SHA256 \
+  --source-selected-at VERIFIED_SOURCE_SELECTION_TIME --output /private/public-preview.json
+```
+
+The selection time must be independently verified; it is not a capture timestamp. This command checks
+the candidate, audit and clearance binding, validates the complete schema and writes a new mode-0600
+file without overwriting an existing file. The result remains private despite its public-schema markers:
+it does not clear translations, authorize publication, verify the reviewer or contact GitHub. Review
+and bind the final preview and both translated overlays separately before publication.
+
+After translation, prepare the exact portable overlays for review in a separate owner-only directory
+containing existing owner-only `fr` and `ja` subdirectories:
+
+```sh
+node scripts/questions_portable_locales.mjs --preview /private/public-preview.json \
+  --store /private/questions-review-store --output /private/portable-locales
+```
+
+This fails on missing or stale translations, removes private cache provenance, and writes new mode-0600
+files. It does not review them. After source-linked review of both files and independent verification of
+the publication review record and live-preview hash, the complete publisher requires those same
+portable files and the private review inputs:
+
+```sh
+python3 scripts/publish_data.py publish-questions-preview \
+  --source /private/public-preview.json --store /private/portable-locales \
+  --expected-preview-sha256 VERIFIED_CURRENT_PREVIEW_SHA256 --allow-complete \
+  --review-candidate /private/candidate.json --review-audit /private/audit.json \
+  --review-clearance /private/publication-review.json --review-clearance-sha256 VERIFIED_REVIEW_SHA256
+```
+
+The complete rollout gate must be explicitly enabled first; `--deploy` additionally requests the Pages
+workflow. Under the publication lease, the publisher snapshots and preflights the reviewed inputs,
+rejects an unnormalized preview or a nonportable/changed overlay before upload, and uploads the exact
+reviewed preview and overlay bytes. It retains unrelated locale documents. A successful preflight is
+not proof that review occurred, and independent backups and live verification are still required.

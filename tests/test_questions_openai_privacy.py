@@ -11,6 +11,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline/src"))
 from fminer import questions_openai_privacy as hosted, questions_privacy as privacy
+from fminer import questions_openai_review as independent
 
 MODEL = "synthetic-2026-01-01"
 
@@ -68,6 +69,29 @@ class HostedPrivacyTests(unittest.TestCase):
             self.assertEqual(caught.exception.reason, "credential_in_display")
             with self.assertRaises(privacy.ProposalError):
                 hosted.detect("Use ghp_1234567890123456789012345", [], MODEL)
+
+    def test_independent_review_sends_no_raw_posts_and_rejection_is_not_retried_into_acceptance(self):
+        requests = []
+        decision = {"privacy_clear": True, "meaning_preserved": False, "uncertain": False}
+        def capture(request):
+            requests.append(request)
+            return self.response(decision)
+        client = httpx.Client(transport=httpx.MockTransport(capture), follow_redirects=False, trust_env=False)
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}), \
+                patch.object(hosted.httpx, "Client", return_value=client):
+            result, audit = independent.review("AlicePrivate uses ORDA.", "[redacted] uses ORDA.",
+                                              [{"user": "AlicePrivate", "text": "PRIVATE RAW POST"}], MODEL)
+        self.assertFalse(result["meaning_preserved"])
+        self.assertEqual(len(requests), 1)
+        payload = json.loads(requests[0].content)
+        self.assertNotEqual(payload["messages"][0]["content"], privacy.SYSTEM)
+        data = json.loads(payload["messages"][1]["content"])
+        self.assertEqual(data["private_identity_hints"], ["AlicePrivate"])
+        self.assertNotIn("PRIVATE RAW POST", requests[0].content.decode())
+        self.assertEqual(audit["version"], independent.VERSION)
+        with patch.object(hosted.httpx, "Client", side_effect=AssertionError("network attempted")):
+            with self.assertRaises(privacy.ProposalError):
+                independent.review("password=synthetic", "[redacted]", [], MODEL)
 
     def test_ambiguous_uncertain_refusal_and_unpinned_model_fail_closed(self):
         for result in ({"uncertain": True, "spans": []},

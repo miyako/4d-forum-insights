@@ -2,10 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { main as backfill, seedQuestionsCache, stringUnits } from '../scripts/backfill-requests.mjs';
 import { sourceHash, readSourceRecords, readOverlay, writeOverlay, recordsFromColumns } from '../scripts/localization.mjs';
 import { translatedFields, applyOverlay, sourceHash as browserHash } from '../site/js/locale.js';
 import { stageLocalizedPreview } from '../scripts/questions_local_preview.mjs';
+import { translateReviewed } from '../scripts/questions_translate_review.mjs';
+import { publicationPreflight } from '../scripts/questions_publication_preflight.mjs';
+import { buildCompletePreview } from '../scripts/questions_build_complete_preview.mjs';
+import { stagePortableLocales } from '../scripts/questions_portable_locales.mjs';
 import { COVERAGE, IMPACT, COMPLEXITY, DOMAINS } from '../site/js/questions-core.js';
 
 function fixture() {
@@ -40,6 +45,260 @@ test('Questions canonical display hashes are identical in cache/export/browser a
     m.questions_view.files.entries = '../outside.json';
     fs.writeFileSync(path.join(f.data, 'manifest.json'), JSON.stringify(m));
     assert.throws(() => readSourceRecords(f.data, 'questions'), /escapes/);
+  } finally { f.cleanup(); }
+});
+
+test('complete private corpus staging keeps the production and semantic gates disabled', () => {
+  const f = fixture();
+  try {
+    const rating = labels => ({ choice: Object.keys(labels)[0],
+      probabilities: Object.fromEntries(Object.keys(labels).map((key, index) => [key, index === 0 ? 1 : 0])) });
+    const entries = f.rows.map((row, i) => ({
+      ...row, active: null, accepted: null, closed: null, replies: null,
+      answers: { has_question: { noul: i ? 0 : 1 }, clarification: { noul: 0 },
+        coverage: rating(COVERAGE), impact: rating(IMPACT), technicality: rating(COMPLEXITY),
+        ...Object.fromEntries(Object.keys(DOMAINS).map(key => ['domain_' + key, { noul: 0 }])) },
+    }));
+    const candidate = { schema_version: 'questions-ui-private-preview-v1', version: 1, private_preview: true,
+      publish_allowed: false, generated_at: '2026-11-21T00:00:00Z', snapshot_scope: 'processed',
+      processed_count: 2, eligible_question_count: 1, corpus_total: 2, corpus_complete: true, entries };
+    const source = path.join(f.root, 'candidate.json');
+    fs.writeFileSync(source, JSON.stringify(candidate));
+    const audit = path.join(f.root, 'audit.json');
+    const report = { schema_version: 'questions-export-private-audit-v1', privacy_review_required: true,
+      publication_authorized: false, candidate_sha256: createHash('sha256').update(fs.readFileSync(source)).digest('hex'),
+      processed_count: 2, eligible_question_count: 1, corpus_total: 2, corpus_complete: true };
+    fs.writeFileSync(audit, JSON.stringify(report));
+    const options = { source, audit, data: f.data, store: f.store, output: path.join(f.root, 'complete') };
+    assert.throws(() => stageLocalizedPreview({ ...options, audit: undefined }), /requires its source audit/);
+    fs.writeFileSync(audit, JSON.stringify({ ...report, candidate_sha256: '0'.repeat(64) }));
+    assert.throws(() => stageLocalizedPreview(options), /candidate and source audit do not match/);
+    fs.writeFileSync(audit, JSON.stringify({ ...report, publication_authorized: true }));
+    assert.throws(() => stageLocalizedPreview(options), /candidate and source audit do not match/);
+    fs.writeFileSync(audit, JSON.stringify(report));
+    const output = stageLocalizedPreview(options);
+    const manifest = JSON.parse(fs.readFileSync(path.join(output, 'data/manifest.json')));
+    assert.equal(manifest.questions_view.corpus_complete, true);
+    assert.equal(manifest.questions_view.enabled, false);
+    assert.equal(manifest.questions_view.semantic_enabled, false);
+    assert.equal(manifest.publish_allowed, false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'data/questions/entries.json'))).entries.length, 2);
+  } finally { f.cleanup(); }
+});
+
+test('translation requires independent candidate-bound clearance and keeps results private', async () => {
+  const f = fixture();
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'synthetic-only';
+  try {
+    fs.mkdirSync(f.store, { mode: 0o700 });
+    const seedStore = path.join(f.root, 'durable-seed');
+    fs.mkdirSync(path.join(seedStore, 'ja'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(seedStore, 'ja/voices.json'), '{"preserve":true}');
+    const rating = labels => ({ choice: Object.keys(labels)[0],
+      probabilities: Object.fromEntries(Object.keys(labels).map((key, index) => [key, index === 0 ? 1 : 0])) });
+    const entries = f.rows.map(row => ({ ...row, active: null, accepted: null, closed: null, replies: null,
+      answers: { has_question: { noul: 1 }, clarification: { noul: 0 }, coverage: rating(COVERAGE),
+        impact: rating(IMPACT), technicality: rating(COMPLEXITY),
+        ...Object.fromEntries(Object.keys(DOMAINS).map(key => ['domain_' + key, { noul: 0 }])) } }));
+    const candidate = path.join(f.root, 'candidate.json'), audit = path.join(f.root, 'audit.json');
+    const clearance = path.join(f.root, 'clearance.json');
+    const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    fs.writeFileSync(candidate, JSON.stringify({ schema_version: 'questions-ui-private-preview-v1', version: 1,
+      private_preview: true, publish_allowed: false, generated_at: '2026-11-21T00:00:00Z',
+      snapshot_scope: 'processed', processed_count: 2, eligible_question_count: 2,
+      corpus_total: 2, corpus_complete: true, entries }));
+    fs.writeFileSync(audit, JSON.stringify({ schema_version: 'questions-export-private-audit-v1',
+      candidate_sha256: digest(candidate), privacy_review_required: true, publication_authorized: false,
+      processed_count: 2, eligible_question_count: 2, corpus_total: 2, corpus_complete: true }));
+    fs.writeFileSync(clearance, JSON.stringify({ schema_version: 'questions-private-translation-clearance-v1',
+      candidate_sha256: digest(candidate), audit_sha256: digest(audit), source_linked_privacy_review: true,
+      openai_translation_authorized: true, reviewer: 'independent reviewer', reviewed_at: '2026-11-21T00:00:00Z' }));
+    const options = { candidate, audit, clearance, clearanceSha256: digest(clearance), store: f.store,
+      model: 'synthetic', workers: '1' };
+    let calls = 0;
+    const translate = async prompt => {
+      calls++;
+      const request = JSON.parse(prompt.split('INPUT JSON:\n')[1]);
+      return { batch_id: request.batch_id, units: request.units.map(unit => ({ id: unit.id, text: `Traduit ${unit.text}` })) };
+    };
+    await assert.rejects(translateReviewed({ ...options, clearanceSha256: '0'.repeat(64) }, { translate }), /clearance/i);
+    assert.equal(calls, 0);
+    const approval = JSON.parse(fs.readFileSync(clearance));
+    fs.writeFileSync(clearance, JSON.stringify({ ...approval, openai_translation_authorized: false }));
+    await assert.rejects(translateReviewed({ ...options, clearanceSha256: digest(clearance) }, { translate }), /clearance/i);
+    fs.writeFileSync(clearance, JSON.stringify(approval));
+    await assert.rejects(translateReviewed({ ...options, store: seedStore }, { translate }), /new empty directory/i);
+    const result = await translateReviewed({ ...options, seedStore }, { translate });
+    assert.equal(result.translation_review_required, true);
+    assert.equal(result.publication_authorized, false);
+    assert.equal(result.translated, 8);
+    assert.equal(calls, 2);
+    assert.equal(fs.readFileSync(path.join(seedStore, 'ja/voices.json'), 'utf8'), '{"preserve":true}');
+    assert.equal(fs.readFileSync(path.join(f.store, 'ja/voices.json'), 'utf8'), '{"preserve":true}');
+    assert.equal(fs.readdirSync(f.store).some(name => name.startsWith('.questions-translation-')), false);
+    const repeat = await translateReviewed(options, { translate });
+    assert.equal(repeat.model_calls, 0);
+    const badStore = path.join(f.root, 'bad-store');
+    fs.mkdirSync(badStore, { mode: 0o700 });
+    fs.symlinkSync(candidate, path.join(seedStore, 'unsafe-link'));
+    await assert.rejects(translateReviewed({ ...options, store: badStore, seedStore }, { translate }), /regular files/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(badStore, '.questions-review-store.json'))).state, 'initializing');
+    await assert.rejects(translateReviewed({ ...options, store: badStore }, { translate }), /identity/i);
+    fs.appendFileSync(candidate, ' ');
+    await assert.rejects(translateReviewed(options, { translate }), /clearance/i);
+    assert.equal(calls, 2);
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+    f.cleanup();
+  }
+});
+
+test('publication preflight binds reviewed preview and locales without publishing', () => {
+  const f = fixture();
+  try {
+    const rating = labels => ({ choice: Object.keys(labels)[0],
+      probabilities: Object.fromEntries(Object.keys(labels).map((key, index) => [key, index === 0 ? 1 : 0])) });
+    const entries = f.rows.map(row => ({ ...row, active: null, accepted: null, closed: null, replies: null,
+      answers: { has_question: { noul: 1 }, clarification: { noul: 0 }, coverage: rating(COVERAGE),
+        impact: rating(IMPACT), technicality: rating(COMPLEXITY),
+        ...Object.fromEntries(Object.keys(DOMAINS).map(key => ['domain_' + key, { noul: 0 }])) } }));
+    const files = Object.fromEntries(['candidate', 'audit', 'preview', 'fr', 'ja', 'clearance']
+      .map(key => [key, path.join(f.root, `${key}.json`)]));
+    const write = (key, value) => fs.writeFileSync(files[key], JSON.stringify(value));
+    const digest = key => createHash('sha256').update(fs.readFileSync(files[key])).digest('hex');
+    const snapshot = { schema_version: 'questions-ui-private-preview-v1', version: 1, private_preview: true,
+      publish_allowed: false, generated_at: '2026-11-21T00:00:00Z', snapshot_scope: 'processed',
+      processed_count: 2, eligible_question_count: 2, corpus_total: 3, corpus_complete: false, entries };
+    write('candidate', snapshot);
+    write('audit', { schema_version: 'questions-export-private-audit-v1', candidate_sha256: digest('candidate'),
+      privacy_review_required: true, publication_authorized: false, processed_count: 2, eligible_question_count: 2,
+      corpus_total: 3, corpus_complete: false });
+    const publicRows = entries.map((row, i) => ({ ...row, title: i === 0 ? 'Redacted title' : row.title }));
+    const preview = { ...snapshot, schema_version: 'questions-ui-public-processed-preview-v1',
+      private_preview: false, public_preview: true, publish_allowed: true, representative: false, entries: publicRows };
+    write('preview', preview);
+    for (const locale of ['fr', 'ja']) write(locale, { version: 1, page: 'questions', locale,
+      entries: Object.fromEntries(publicRows.map(row => [row.id, {
+        source_hash: sourceHash({ title: row.title, body: row.body }), translation_version: '1',
+        fields: { title: `Translated ${row.title}`, body: `Translated ${row.body}` },
+      }])) });
+    const approval = () => ({ schema_version: 'questions-private-publication-review-v1',
+      candidate_sha256: digest('candidate'), audit_sha256: digest('audit'), preview_sha256: digest('preview'),
+      fr_sha256: digest('fr'), ja_sha256: digest('ja'), source_linked_privacy_review: true, translation_review: true,
+      publication_authorized: true, reviewer: 'independent reviewer', reviewed_at: '2026-11-21T00:00:00Z',
+      expected_current_preview_sha256: 'a'.repeat(64) });
+    write('clearance', approval());
+    const run = () => publicationPreflight({ ...files, clearanceSha256: digest('clearance') });
+    const result = run();
+    assert.equal(result.technical_checks_passed, true);
+    assert.equal(result.publication_performed, false);
+    const french = JSON.parse(fs.readFileSync(files.fr));
+    const incomplete = structuredClone(french);
+    delete incomplete.entries[1];
+    write('fr', incomplete);
+    write('clearance', approval());
+    assert.throws(run, /Incomplete fr/);
+    write('fr', french);
+    write('clearance', approval());
+    fs.appendFileSync(files.fr, ' ');
+    assert.throws(run, /publication review/i);
+    write('clearance', approval());
+    assert.equal(run().publication_performed, false);
+    const altered = structuredClone(preview);
+    altered.entries[0].accepted = true;
+    write('preview', altered);
+    write('clearance', approval());
+    assert.throws(run, /decision metadata/i);
+    write('preview', { ...preview, corpus_total: 2, corpus_complete: true });
+    write('clearance', approval());
+    assert.throws(run, /publication-approved/i);
+    const fullEntries = entries.map(row => ({ ...row, evidence_warnings: [],
+      answers: { ...row.answers, version_dependent: { noul: .2 } }, decision_model: 'private-model',
+      decision_version: 'private-prompt' }));
+    write('candidate', { ...snapshot, corpus_total: 2, corpus_complete: true, entries: fullEntries });
+    write('audit', { schema_version: 'questions-export-private-audit-v1', candidate_sha256: digest('candidate'),
+      privacy_review_required: true, publication_authorized: false, processed_count: 2,
+      eligible_question_count: 2, corpus_total: 2, corpus_complete: true });
+    write('preview', { ...preview, schema_version: 'questions-ui-public-complete-v1', corpus_total: 2,
+      corpus_complete: true, source_selected_at: '2026-11-12T04:16:20Z', entries: fullEntries });
+    for (const locale of ['fr', 'ja']) write(locale, { version: 1, page: 'questions', locale,
+      entries: Object.fromEntries(fullEntries.map(row => [row.id, {
+        source_hash: sourceHash({ title: row.title, body: row.body }), translation_version: '1',
+        fields: { title: `Translated ${row.title}`, body: `Translated ${row.body}` },
+      }])) });
+    write('clearance', approval());
+    assert.equal(run().publication_performed, false);
+  } finally { f.cleanup(); }
+});
+
+test('complete preview builder requires hash-bound review and preserves reviewed display text', () => {
+  const f = fixture();
+  try {
+    const rating = labels => ({ choice: Object.keys(labels)[0],
+      probabilities: Object.fromEntries(Object.keys(labels).map((key, index) => [key, index === 0 ? 1 : 0])) });
+    const entries = f.rows.map((row, i) => ({ ...row, active: null, accepted: null, closed: null, replies: null,
+      evidence_warnings: [], decision_model: 'private', decision_version: 'private',
+      answers: { has_question: { noul: i ? 0 : 1 }, clarification: { noul: 0 }, version_dependent: { noul: 0 },
+        coverage: rating(COVERAGE), impact: rating(IMPACT), technicality: rating(COMPLEXITY),
+        ...Object.fromEntries(Object.keys(DOMAINS).map(key => ['domain_' + key, { noul: 0 }])) } }));
+    const files = Object.fromEntries(['candidate', 'audit', 'clearance', 'output']
+      .map(key => [key, path.join(f.root, `${key}.json`)]));
+    const write = (key, value) => fs.writeFileSync(files[key], JSON.stringify(value));
+    const digest = key => createHash('sha256').update(fs.readFileSync(files[key])).digest('hex');
+    write('candidate', { schema_version: 'questions-ui-private-preview-v1', version: 1, private_preview: true,
+      publish_allowed: false, generated_at: '2026-11-21T00:00:00Z', snapshot_scope: 'processed',
+      processed_count: 2, eligible_question_count: 1, corpus_total: 2, corpus_complete: true, entries });
+    write('audit', { schema_version: 'questions-export-private-audit-v1', candidate_sha256: digest('candidate'),
+      privacy_review_required: true, publication_authorized: false, processed_count: 2,
+      eligible_question_count: 1, corpus_total: 2, corpus_complete: true });
+    write('clearance', { schema_version: 'questions-private-translation-clearance-v1',
+      candidate_sha256: digest('candidate'), audit_sha256: digest('audit'), source_linked_privacy_review: true,
+      openai_translation_authorized: true, reviewer: 'independent reviewer', reviewed_at: '2026-11-21T00:00:00Z' });
+    const options = { ...files, clearanceSha256: digest('clearance'), sourceSelectedAt: '2026-11-12T04:16:20Z' };
+    assert.throws(() => buildCompletePreview({ ...options, clearanceSha256: '0'.repeat(64) }), /clearance/i);
+    assert.throws(() => buildCompletePreview({ ...options, sourceSelectedAt: 'unknown' }), /explicit scope/i);
+    assert.equal(fs.existsSync(files.output), false);
+    const result = buildCompletePreview(options);
+    const preview = JSON.parse(fs.readFileSync(files.output));
+    assert.equal(result.preview_sha256, digest('output'));
+    assert.equal(result.publication_performed, false);
+    assert.equal(result.translation_review_required, true);
+    assert.equal(fs.statSync(files.output).mode & 0o777, 0o600);
+    assert.equal(preview.entries.length, 2);
+    assert.equal(preview.entries[0].title, entries[0].title);
+    assert.equal(preview.entries[1].body, entries[1].body);
+    assert.equal('decision_model' in preview.entries[0], false);
+    const portable = path.join(f.root, 'portable');
+    fs.mkdirSync(f.store, { mode: 0o700 });
+    fs.mkdirSync(portable, { mode: 0o700 });
+    for (const locale of ['fr', 'ja']) {
+      fs.mkdirSync(path.join(f.store, locale), { mode: 0o700 });
+      fs.mkdirSync(path.join(portable, locale), { mode: 0o700 });
+      const overlay = { version: 1, locale, page: 'questions', entries: Object.fromEntries(entries.map(row => [row.id, {
+        source_hash: sourceHash({ title: row.title, body: row.body }), translation_version: '1',
+        fields: { title: `Translated ${row.title}`, body: `Translated ${row.body}` }, field_sources: { private: true },
+      }])) };
+      fs.writeFileSync(path.join(f.store, locale, 'questions.json'), JSON.stringify(overlay));
+    }
+    const japanese = path.join(f.store, 'ja/questions.json');
+    const currentJapanese = fs.readFileSync(japanese, 'utf8');
+    const staleJapanese = JSON.parse(currentJapanese);
+    staleJapanese.entries[1].source_hash = '0'.repeat(64);
+    fs.writeFileSync(japanese, JSON.stringify(staleJapanese));
+    assert.throws(() => stagePortableLocales({ preview: files.output, store: f.store, output: portable }), /Incomplete ja/);
+    assert.equal(fs.existsSync(path.join(portable, 'fr/questions.json')), false);
+    fs.writeFileSync(japanese, currentJapanese);
+    const localized = stagePortableLocales({ preview: files.output, store: f.store, output: portable });
+    const frenchPath = path.join(portable, 'fr/questions.json');
+    assert.equal(localized.fr_sha256, createHash('sha256').update(fs.readFileSync(frenchPath)).digest('hex'));
+    assert.equal('field_sources' in JSON.parse(fs.readFileSync(frenchPath)).entries[1], false);
+    assert.equal(fs.statSync(frenchPath).mode & 0o777, 0o600);
+    assert.throws(() => stagePortableLocales({ preview: files.output, store: f.store, output: portable }), /EEXIST/);
+    assert.throws(() => buildCompletePreview(options), /EEXIST/);
+    fs.appendFileSync(files.candidate, ' ');
+    assert.throws(() => buildCompletePreview(options), /clearance/i);
   } finally { f.cleanup(); }
 });
 
