@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Private English Questions pilot. Own servers only; no publishing or shared DB pushes.
+# Private Questions decisions or English pilot. Own servers only; no shared DB pushes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs
@@ -13,6 +13,19 @@ DECISION_PORT=${DECISION_PORT:-18080}
 GEN_PORT=${GEN_PORT:-18081}
 DECISION_ARGS=${DECISION_ARGS:--c 16384 -fa on}
 GEN_ARGS=${GEN_ARGS:---spec-type draft-mtp --no-mmproj -c 32768 -fa on --jinja --cache-ram 0}
+QUESTIONS_SCOPE=${QUESTIONS_SCOPE:-pilot}
+if [ "$QUESTIONS_SCOPE" != pilot ] && [ "$QUESTIONS_SCOPE" != all ]; then
+    echo "QUESTIONS_SCOPE must be pilot or all" >&2
+    exit 1
+fi
+if [ "$QUESTIONS_SCOPE" = all ]; then
+    : "${QUESTIONS_SOURCE:?set the private read-only source snapshot path}"
+    : "${QUESTIONS_RESULTS:?set a separate private ratings DB path}"
+    : "${MODEL_REVISION:?set a weight SHA256 and runtime revision for cache freshness}"
+    [ "$WORKERS" = 1 ] || { echo "Corpus execution requires one full-context worker" >&2; exit 1; }
+    corpus=(uv run -q fminer questions-corpus)
+    corpus_paths=(--source "$QUESTIONS_SOURCE" --results "$QUESTIONS_RESULTS")
+fi
 
 command -v "$SERVER" >/dev/null || { echo "Missing llama-server: set LLAMA_SERVER to its path" >&2; exit 1; }
 pid=""
@@ -29,7 +42,8 @@ trap 'exit 143' TERM
 
 start_server() {
     local model=$1 port=$2 args=$3 logfile=$4
-    if curl -s -m 2 "http://127.0.0.1:$port/health" >/dev/null; then
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 ||
+        curl -s -m 2 "http://127.0.0.1:$port/health" >/dev/null; then
         echo "Port $port is occupied; select a different pilot port" >&2
         exit 1
     fi
@@ -54,10 +68,20 @@ start_server() {
 if [ "${SKIP_CLASSIFY:-}" != 1 ]; then
     echo "== Questions decision pilot"
     start_server "$DECISION_MODEL" "$DECISION_PORT" "$DECISION_ARGS" logs/questions-decision-server.log
-    uv run -q fminer questions-classify --base-url "http://127.0.0.1:$DECISION_PORT" \
-        --sample "${SAMPLE:-30}" --seed "${SEED:-7}" --workers "$WORKERS" \
-        ${CLASSIFY_BUDGET:+--budget-minutes "$CLASSIFY_BUDGET"}
+    if [ "$QUESTIONS_SCOPE" = all ]; then
+        "${corpus[@]}" classify "${corpus_paths[@]}" --base-url "http://127.0.0.1:$DECISION_PORT" \
+            --model-revision "$MODEL_REVISION" ${CLASSIFY_BUDGET:+--budget-minutes "$CLASSIFY_BUDGET"} \
+            ${QUESTIONS_LIMIT:+--limit "$QUESTIONS_LIMIT"} ${QUESTIONS_TOPIC_IDS:+--topic-ids "$QUESTIONS_TOPIC_IDS"}
+    else
+        uv run -q fminer questions-classify --base-url "http://127.0.0.1:$DECISION_PORT" \
+            --sample "${SAMPLE:-30}" --seed "${SEED:-7}" --workers "$WORKERS" \
+            ${CLASSIFY_BUDGET:+--budget-minutes "$CLASSIFY_BUDGET"}
+    fi
     cleanup
+fi
+if [ "$QUESTIONS_SCOPE" = all ]; then
+    "${corpus[@]}" stats "${corpus_paths[@]}"
+    exit
 fi
 if [ "${SKIP_WRITE:-}" != 1 ]; then
     echo "== Questions English write-ups"

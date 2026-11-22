@@ -12,7 +12,7 @@ from .kb import _pool
 from .scrape import now, split_raw
 from .voices import anonymise, forbidden_names, _designature, _LETTER_REF, _spread
 
-EVIDENCE_VERSION = "questions-e4"
+EVIDENCE_VERSION = "questions-e5"
 CORE_POSTS = 8
 COVERAGE = {
     "none": "no useful answer to the original need: no replies, clarification requests only, unrelated discussion "
@@ -324,10 +324,21 @@ def evidence(row, max_chars):
     # The opening and latest reply matter more than the summary for answer coverage.
     per_post = max(120, min(1400, (max_chars - len(head) - 200) // min(len(posts), CORE_POSTS) - 80))
     count = max(2, (max_chars - len(head) - 100) // (per_post + 100))
+    count = max(count, min(len(posts), CORE_POSTS))
     author_replies = [i for i, p in enumerate(posts) if i and p["user"] == posts[0]["user"]]
     preferred = [0, len(posts) - 1, *([1] if len(posts) > 1 else []), *author_replies[-3:]]
     priority = list(dict.fromkeys(preferred + _spread(len(posts), CORE_POSTS) + _spread(len(posts), count)))
     indices = sorted(priority[:count])
+
+    def heading(post):
+        role = "original poster" if post["user"] == posts[0]["user"] else "other participant"
+        return f"Post {post['n']}, participant {labels[post['user']]} ({role}), {post['date']}:\n"
+
+    omissions = [f"[{i - prev - 1} posts omitted]" for prev, i in zip([-1, *indices], indices)
+                 if i > prev + 1]
+    overhead = len(head) + sum(len(heading(posts[i])) for i in indices) + sum(map(len, omissions))
+    overhead += 2 * (len(indices) + len(omissions) - 1)
+    per_post = min(1400, (max_chars - overhead) // len(indices))
     lines, cited, previous = [], set(), -1
     for i in indices:
         post = posts[i]
@@ -335,9 +346,7 @@ def evidence(row, max_chars):
             lines.append(f"[{i - previous - 1} posts omitted]")
         text = row["first_post_en"] if i == 0 else post["text"]
         text = scrub(_CODE_BLOCK.sub("[code snippet]", _QUOTE.sub("", _designature(text))))
-        role = "original poster" if post["user"] == posts[0]["user"] else "other participant"
-        lines.append(f"Post {post['n']}, participant {labels[post['user']]} ({role}), {post['date']}:\n"
-                     + bounded_excerpt(text, per_post))
+        lines.append(heading(post) + bounded_excerpt(text, per_post))
         cited.add(post["n"])
         previous = i
     return head + "\n\n".join(lines), cited
