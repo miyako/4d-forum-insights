@@ -84,7 +84,8 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, previ
     locales = {locale: {"version": 1, "locale": locale, "page": "questions", "entries": {}}
                for locale in weekly.LOCALES}
     pending = {"index or source": 0, "missing or invalid English display": 0, "credential pattern": 0,
-               "Kev timeout": 0, "OpenAI failure": 0, "sensitive display": 0, "batch limit": 0}
+               "Kev timeout": 0, "OpenAI failure": 0, "sensitive display": 0, "source code": 0,
+               "batch limit": 0}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
         rows = list(con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
@@ -154,6 +155,10 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, previ
                     translated = prepare.translate(entry, os.environ["OPENAI_MODEL"])
                     cached = {locale: doc["entries"][str(topic_id)] for locale, doc in translated.items()}
             except ProposalError as error:
+                if error.reason == "source_code_in_display":
+                    pending["source code"] += 1
+                    print(f"::warning::Topic {topic_id} contains source code in its display; it remains pending")
+                    continue
                 if error.reason != "sensitive_display":
                     raise
                 pending["sensitive display"] += 1

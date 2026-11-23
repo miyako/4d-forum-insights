@@ -59,6 +59,14 @@ class AutomaticEnrichmentTests(unittest.TestCase):
         display, _ = auto.display_for(topic, "Use `example()` here.", None, {})
         self.assertNotIn("example()", display["body"])
 
+    def test_unmarked_source_code_is_not_sent(self):
+        display = {"title": "Issue", "body": "The expression QUERY([Items]; $value) fails."}
+        with (patch.object(prepare.questions_corpus, "split_raw", return_value=[]),
+              patch.object(prepare, "complete") as complete):
+            with self.assertRaises(prepare.questions_privacy.ProposalError):
+                prepare.enrich_display(display, {"thread_raw": ""}, "model")
+            complete.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
