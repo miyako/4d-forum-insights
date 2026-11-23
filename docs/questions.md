@@ -1046,3 +1046,32 @@ workflow. Under the publication lease, the publisher snapshots and preflights th
 rejects an unnormalized preview or a nonportable/changed overlay before upload, and uploads the exact
 reviewed preview and overlay bytes. It retains unrelated locale documents. A successful preflight is
 not proof that review occurred, and independent backups and live verification are still required.
+
+### Private initial translation on GitHub Actions
+
+When the configured OpenAI key is available only in Actions, the manual
+`questions-release-prepare.yml` workflow can prepare translations without publishing them.
+It executes default-branch code, uses `OPENAI_API_KEY` and `OPENAI_MODEL`, and requires a
+separate one-time 256-bit `QUESTIONS_RELEASE_TRANSFER_KEY` secret shared with the local
+operator. Never put either key in source, command arguments, logs or public assets.
+
+`questions_release_transfer.mjs` transfers only allowlisted candidate/audit/clearance,
+localization and summary files; source databases and raw posts are excluded. Bundles are
+gzip-compressed and authenticated with AES-256-GCM. The local operator retains the key in
+independently backed-up private storage until every output has been recovered and verified.
+Upload only ciphertext to the `data` release. Dispatch requires its exact asset name and
+SHA-256; authenticated decryption and candidate-bound clearance are checked before requests.
+
+The workflow reuses exact-string caches and translates only missing FR/JA strings, with
+two workers, 40 strings per batch and the existing bounded request/schema handling.
+The dispatch specifies a total string-attempt and time budget, not a spending guarantee.
+Each completed block of at most 1,000 attempted strings, including a failed block with
+partial results, produces a new immutable encrypted release checkpoint. A hard termination
+can lose progress since the last checkpoint. The workflow never uploads plaintext artifacts,
+publishes Questions data, clears translated fields or enables weekly processing.
+
+Recover outputs locally with `questions_release_transfer.mjs --operation open`, verify
+their hashes, preserve independent backups and review the exact translated outputs before
+publication. Resume from a newly encrypted recovered bundle; do not silently rerun failed
+work. Remove the one-time transfer secret and the specifically identified temporary
+ciphertext assets only after verified recovery.
