@@ -164,6 +164,23 @@ Actions artifacts or public release assets.
 
 ## Readiness, review and durable seeding
 
+`Weekly Questions` can be dispatched with `baseline_sha256` to create
+`questions-public-baseline.tar.zst.enc` on the `data` release. This is a
+create-only checkpoint of the complete published EN/FR/JA corpus, not the
+private, runnable `questions-weekly.tar.zst.enc` checkpoint. The job
+downloads only the fixed Pages paths, checks all three published files against
+the supplied bundle digest, verifies overlay coverage and checks the encrypted
+round trip. It does not process forum deltas or call models.
+
+To calculate the dispatch input, download these paths from the same Pages
+deployment under a common directory and run from that directory:
+
+```sh
+sha256sum questions/preview.json locales/fr/questions.json locales/ja/questions.json | sha256sum
+```
+
+Pass the first output field as `baseline_sha256`.
+
 An authorized owner must first consolidate the reviewed source-backed ratings,
 cleared displays and FR/JA caches into an encrypted checkpoint. This code does
 **not** read another worktree's private DB or automatically seed/reconstruct it.

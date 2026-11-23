@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '17 3 * * 1' # Mondays 03:17 UTC, same cadence as delta.yml
   workflow_dispatch:
+    inputs:
+      baseline_sha256:
+        description: 'Create the public-only checkpoint from this bundle digest instead of processing deltas'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -14,7 +19,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  public-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_sha256 != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DB_KEY: ${{ secrets.DB_KEY }}
+      BASELINE_SHA256: ${{ inputs.baseline_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Save the published corpus as the first encrypted public baseline
+        run: |
+          command -v zstd >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zstd; }
+          python3 scripts/publish_data.py with-lock -- bash pipeline/ci/seed-questions-public-baseline.sh
+
   questions:
+    if: github.event_name != 'workflow_dispatch' || inputs.baseline_sha256 == ''
     runs-on: ubuntu-latest
     timeout-minutes: 300
     outputs:
