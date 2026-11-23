@@ -3,6 +3,7 @@
 
 from contextlib import closing
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -62,7 +63,7 @@ def display_for(topic, paragraph, previous, overlays):
     return display, None
 
 
-def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
+def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, preview_binding=None):
     with tarfile.open(work / "site-data.tar.gz") as archive:
         manifest = json.load(archive.extractfile("data/manifest.json"))
         topics = json.load(archive.extractfile("data/topics.json"))
@@ -92,6 +93,8 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
         candidates = []
         for row in rows:
             topic_id = row["id"]
+            if preview_binding and topic_id != preview_binding[0]:
+                continue
             old = previous.get(topic_id)
             if not needs_decision(old, row, baseline_date):
                 continue
@@ -115,7 +118,13 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
             if display is None:
                 pending["missing or invalid English display"] += 1
                 continue
+            if preview_binding:
+                encoded = json.dumps(display, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                if hashlib.sha256(encoded).hexdigest() != preview_binding[1]:
+                    raise ValueError("Bound preview display changed; no OpenAI request sent")
             candidates.append((topic_id, topic, display, cached))
+        if preview_binding and not candidates:
+            raise ValueError("Bound preview topic is not eligible for an update")
         if candidates:
             offset = (timestamp(export_date).date().toordinal() // 7 * limit) % len(candidates)
             candidates = candidates[offset:] + candidates[:offset]
@@ -170,6 +179,14 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
 def main():
     if os.environ.get("DATA_PUBLICATION_CHILD") != "1":
         raise ValueError("Automatic Questions updates require the shared release lease")
+    topic = os.environ.get("QUESTIONS_PREVIEW_TOPIC", "")
+    display_hash = os.environ.get("QUESTIONS_PREVIEW_DISPLAY_SHA256", "")
+    preview_binding = None
+    if topic or display_hash:
+        if (os.environ.get("PUBLICATION_ENABLED") == "true" or not re.fullmatch(r"[1-9]\d*", topic)
+                or not re.fullmatch(r"[0-9a-f]{64}", display_hash)):
+            raise ValueError("A bound preview requires a topic ID, display hash, and publication disabled")
+        preview_binding = (int(topic), display_hash)
     gh = publisher.GitHub(os.environ["GITHUB_REPOSITORY"])
     with tempfile.TemporaryDirectory(prefix="questions-auto-") as directory:
         work = Path(directory)
@@ -200,7 +217,7 @@ read -r shutdown || true
                 raise RuntimeError("Kev launcher did not become ready")
 
         try:
-            update = build_update(source, snapshot, overlays, work, start)
+            update = build_update(source, snapshot, overlays, work, start, preview_binding=preview_binding)
         finally:
             if process is not None:
                 process.stdin.close()

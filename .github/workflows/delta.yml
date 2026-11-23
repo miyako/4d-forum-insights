@@ -20,6 +20,14 @@ on:
         description: 'Only stage a Questions delta from the current forum and search release (never publish)'
         type: boolean
         default: false
+      questions_preview_topic:
+        description: 'Optional single topic ID for a bound Questions preview'
+        type: string
+        required: false
+      questions_preview_display_sha256:
+        description: 'SHA-256 of the canonical display JSON for the selected preview topic'
+        type: string
+        required: false
       skip_models:
         description: 'Only fetch the delta (no models at all)'
         type: boolean
@@ -208,6 +216,8 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
       PUBLICATION_ENABLED: ${{ inputs.questions_preview != true && github.ref_name == github.event.repository.default_branch && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true' }}
+      QUESTIONS_PREVIEW_TOPIC: ${{ inputs.questions_preview_topic }}
+      QUESTIONS_PREVIEW_DISPLAY_SHA256: ${{ inputs.questions_preview_display_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.2

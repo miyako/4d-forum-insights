@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -89,6 +90,28 @@ class AutomaticTimeoutTests(unittest.TestCase):
             update = auto.build_update(self.source, self.snapshot, {}, self.work, lambda: None)
         self.assertEqual([entry["id"] for entry in update["entries"]], [3])
         self.assertIn('"OpenAI failure": 2', output.getvalue())
+
+    def test_preview_binding_rejects_changed_display_before_start(self):
+        started = []
+        with self.assertRaisesRegex(ValueError, "display changed"):
+            auto.build_update(self.source, self.snapshot, {}, self.work, lambda: started.append(True),
+                              preview_binding=(2, "0" * 64))
+        self.assertEqual(started, [])
+
+    def test_preview_binding_only_processes_selected_topic(self):
+        display = {"title": "Question 2", "body": "Public summary"}
+        digest = hashlib.sha256(json.dumps(display, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        translations = {locale: {"entries": {"2": {"fields": {}}}} for locale in auto.weekly.LOCALES}
+        with (patch.object(auto.prepare, "kev_answers", return_value=({}, {})) as kev,
+              patch.object(auto.prepare, "public_row", side_effect=lambda topic, *_: {"id": topic["id"]}),
+              patch.object(auto.prepare, "enrich_display", side_effect=lambda value, *_: value),
+              patch.object(auto.prepare, "translate", return_value=translations),
+              patch.dict(os.environ, {"OPENAI_MODEL": "test-model"}),
+              redirect_stdout(io.StringIO())):
+            update = auto.build_update(self.source, self.snapshot, {}, self.work, lambda: None,
+                                       preview_binding=(2, digest))
+        self.assertEqual([entry["id"] for entry in update["entries"]], [2])
+        kev.assert_called_once_with(self.source, 2)
 
     def test_read_timeout_is_distinct_from_other_server_errors(self):
         corpus = auto.prepare.questions_corpus
