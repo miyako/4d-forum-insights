@@ -20,6 +20,9 @@ the `questions-public-update` artifact before putting it on the `data` release.
 Dispatch its `cleared_update_sha256` to stage it; also set
 `publish_cleared_update` to deploy that exact update manually. Repeating a
 manual publish can retry Pages without rewriting an already-applied update.
+Only `main` may deploy to the `github-pages` environment. If a feature-branch
+run publishes release assets but Pages rejects the branch, dispatch `pages.yml`
+from `main`; do not change the environment protection.
 The preparation step does not discover or prepare new topics on a schedule.
 
 ## Dataflow and freshness
