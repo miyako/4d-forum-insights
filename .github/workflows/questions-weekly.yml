@@ -9,6 +9,14 @@ on:
         description: 'Create the public-only checkpoint from this bundle digest instead of processing deltas'
         type: string
         required: false
+      cleared_update_sha256:
+        description: 'SHA-256 of a cleared public update asset; leave blank to verify the checkpoint'
+        type: string
+        required: false
+      legacy_private:
+        description: 'Run the older private workflow instead of the public checkpoint path'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,7 +43,7 @@ jobs:
           python3 scripts/publish_data.py with-lock -- bash pipeline/ci/seed-questions-public-baseline.sh
 
   questions:
-    if: github.event_name != 'workflow_dispatch' || inputs.baseline_sha256 == ''
+    if: github.event_name == 'workflow_dispatch' && inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.cleared_update_sha256 == ''
     runs-on: ubuntu-latest
     timeout-minutes: 300
     outputs:
@@ -101,9 +109,28 @@ jobs:
           echo 'Local Kev and enrichment; OpenAI redaction and separate review receive only exact cleared display strings, never source identity hints. Only reviewed English enters translation. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Check failing step for readiness, model, checkpoint or publication-review blockers; no deployment occurs on a failed gate.' >> "$GITHUB_STEP_SUMMARY"
 
+  public-update:
+    if: (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && !inputs.legacy_private && inputs.baseline_sha256 == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      published: ${{ steps.update.outputs.published }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DB_KEY: ${{ secrets.DB_KEY }}
+      CLEARED_UPDATE_SHA256: ${{ github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_CLEARED_UPDATE_SHA256 || inputs.cleared_update_sha256 }}
+      PUBLICATION_ENABLED: ${{ vars.QUESTIONS_WEEKLY_ENABLED == 'true' && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore checkpoint and apply a cleared update
+        id: update
+        run: |
+          command -v zstd >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zstd; }
+          python3 scripts/publish_data.py with-lock -- python3 scripts/questions_public_weekly.py
+
   pages:
-    needs: questions
-    if: needs.questions.outputs.published == 'true'
+    needs: [questions, public-update]
+    if: ${{ !cancelled() && (needs.questions.outputs.published == 'true' || needs.public-update.outputs.published == 'true') }}
     uses: ./.github/workflows/pages.yml
     permissions:
       contents: read

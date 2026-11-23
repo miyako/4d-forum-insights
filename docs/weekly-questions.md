@@ -181,6 +181,21 @@ sha256sum questions/preview.json locales/fr/questions.json locales/ja/questions.
 
 Pass the first output field as `baseline_sha256`.
 
+The public weekly path restores this fixed baseline and reads the current
+release as the working state. A manual dispatch with no inputs verifies the
+restore without updating the site. To stage an update, use `cleared_update_sha256`
+to select the already-cleared release asset `questions-cleared-update-<sha>.json`.
+Scheduled runs instead use `QUESTIONS_WEEKLY_CLEARED_UPDATE_SHA256`. The asset
+must contain only publication-ready data (not source posts or review evidence):
+`schema: "questions-cleared-update-v1"`, `base_sha256` (the current
+`questions-preview.json` release asset hash), `source_selected_at` (an advancing
+ISO timestamp), `entries` (canonical public rows to insert or replace), and
+`locales` (the `fr` and `ja` portable overlay documents for exactly those rows).
+This workflow does not author or clear the packet. It preserves all other rows,
+validates complete locale and semantic-index coverage, and uses the shared
+publication lease. Without both weekly flags it cannot publish. The older raw
+source workflow is now a separate manual path (`legacy_private`).
+
 An authorized owner must first consolidate the reviewed source-backed ratings,
 cleared displays and FR/JA caches into an encrypted checkpoint. This code does
 **not** read another worktree's private DB or automatically seed/reconstruct it.

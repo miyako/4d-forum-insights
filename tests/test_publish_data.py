@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,9 @@ import uuid
 SPEC = importlib.util.spec_from_file_location("publish_data", Path(__file__).parents[1] / "scripts/publish_data.py")
 publisher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publisher)
+
+with patch.object(sys, "path", [str(Path(__file__).parents[1] / "scripts"), *sys.path]):
+    import questions_public_weekly as public_weekly
 
 
 class FakeGitHub(publisher.GitHub):
@@ -83,6 +87,40 @@ clarification:{noul:.1},...Object.fromEntries(Object.keys(DOMAINS).map(key=>['do
         path = self.root / "questions-candidate.json"
         path.write_text(result.stdout)
         return path, json.loads(result.stdout)
+
+    def test_public_weekly_delta_preserves_baseline_and_requires_exact_locale_bindings(self):
+        path, raw = self.public_questions()
+        raw.update(schema_version="questions-ui-public-complete-v1", source_selected_at="2026-11-11T00:00:00Z",
+                   corpus_complete=True, corpus_total=2)
+        for row in raw["entries"]:
+            row.update(evidence_warnings=[])
+            row["answers"]["version_dependent"] = {"noul": .1}
+        path.write_text(json.dumps(raw))
+        current = publisher.read_public_questions(path)
+        added = {**current["entries"][0], "id": 3, "title": "Synthetic new question"}
+
+        def overlay(locale, rows):
+            return {"version": 1, "locale": locale, "page": "questions", "entries": {
+                key: {"source_hash": value, "translation_version": "1",
+                      "fields": {"title": "Synthetic translated title", "body": "Synthetic translated summary"}}
+                for key, value in publisher.questions_hashes({"version": 1, "entries": rows}).items()}}
+
+        old = {"data/" + path: overlay(locale, current["entries"]) for locale, path in public_weekly.LOCALES.items()}
+        packet = {"schema": "questions-cleared-update-v1", "base_sha256": "a" * 64,
+                  "source_selected_at": "2026-11-12T00:00:00Z",
+                  "entries": [added], "locales": {locale: overlay(locale, [added]) for locale in public_weekly.LOCALES}}
+        staged, locales = public_weekly.staged_update(current, old, packet, "a" * 64, {1, 2}, self.root)
+        self.assertEqual(staged["entries"], [*current["entries"], added])
+        self.assertEqual(staged["eligible_question_count"], 2)
+        self.assertTrue(public_weekly.already_applied(staged, locales, packet))
+        self.assertFalse(public_weekly.already_applied(current, old, packet))
+        with self.assertRaisesRegex(ValueError, "current Questions release"):
+            public_weekly.staged_update(current, old, packet, "b" * 64, {1, 2}, self.root)
+        with self.assertRaisesRegex(ValueError, "full public baseline"):
+            public_weekly.staged_update(current, old, packet, "a" * 64, {1, 2, 4}, self.root)
+        packet["locales"]["ja"]["entries"]["3"]["source_hash"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "stale ja translation"):
+            public_weekly.staged_update(current, old, packet, "a" * 64, {1, 2}, self.root)
 
     def test_questions_publication_requires_complete_locales_and_preserves_english_and_other_pages(self):
         source = self.source()
