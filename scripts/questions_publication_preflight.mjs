@@ -19,10 +19,14 @@ export function publicationPreflight({ candidate, audit, preview, fr, ja, cleara
   const files = { candidate, audit, preview, fr, ja };
   const bytes = Object.fromEntries(Object.entries(files).map(([key, file]) => [key, readFileSync(file)]));
   const hashes = Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, digest(value)]));
-  if (approval.schema_version !== 'questions-private-publication-review-v1'
+  const translationApproved =
+    (approval.schema_version === 'questions-private-publication-review-v1' && approval.translation_review === true)
+    || (approval.schema_version === 'questions-private-publication-owner-acceptance-v1'
+      && approval.translation_review === false && approval.unreviewed_translations_accepted === true);
+  if (!translationApproved
       || approval.candidate_sha256 !== hashes.candidate || approval.audit_sha256 !== hashes.audit
       || approval.preview_sha256 !== hashes.preview || approval.fr_sha256 !== hashes.fr || approval.ja_sha256 !== hashes.ja
-      || approval.source_linked_privacy_review !== true || approval.translation_review !== true
+      || approval.source_linked_privacy_review !== true
       || approval.publication_authorized !== true || typeof approval.reviewer !== 'string' || !approval.reviewer.trim()
       || typeof approval.reviewed_at !== 'string' || !Number.isFinite(Date.parse(approval.reviewed_at))
       || typeof approval.expected_current_preview_sha256 !== 'string'

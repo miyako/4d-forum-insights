@@ -976,7 +976,13 @@ the existing publisher must recheck the expected live hash under its lease after
 The existing partial public preview contract continues to reject complete corpora. The separate complete
 snapshot contract below is not enabled by this preflight.
 
-### Complete frozen-snapshot contract (disabled)
+For an explicitly authorized release without a separate translation review, the owner may instead bind
+the same artifact hashes and English privacy review using
+`schema_version: "questions-private-publication-owner-acceptance-v1"`,
+`translation_review: false` and `unreviewed_translations_accepted: true`. This records the owner's
+decision without asserting that translations were reviewed; it does not waive the other checks.
+
+### Complete frozen-snapshot contract
 
 `questions-ui-public-complete-v1` is a separate, proposed public **preview**, not a claim that the
 live forum is complete. It uses `version:1`, `public_preview:true`, `private_preview:false`,
@@ -995,14 +1001,14 @@ approved rows against the **validator-normalized** baseline, accounting for this
 not the raw private export; source-linked audits and provenance remain private. Any reviewed redactions
 change translation source hashes and must be reflected in the reviewed FR/JA overlays.
 
-`config/questions-preview.json` retains the existing preview setting and defaults `complete_enabled` to
-false. Pages refuses a complete snapshot while that gate is off. The publisher separately requires
+`config/questions-preview.json` retains the existing preview setting and enables `complete_enabled`
+for the approved frozen release. Pages refuses a complete snapshot while that gate is off. The publisher separately requires
 `--allow-complete` and an enabled complete gate, a reviewed expected current-preview hash, and complete,
 source-hash-matching French and Japanese overlays. It refuses to replace a complete snapshot with a
 partial preview. These checks do not prove review, authorize model calls or authorize release/deployment.
 The source owner must still produce and review the private candidate, reconcile baseline and timestamps,
-and record independent source-linked privacy and translation review bound to exact artifacts before
-any separately authorized activation or publication.
+and bind the source-linked privacy review and either a translation review or explicit owner acceptance
+of unreviewed translations to the exact artifacts before publication.
 
 After the source-linked review and independently verified translation clearance above, stage the
 complete public-shaped preview in an existing owner-only private directory:
@@ -1029,9 +1035,9 @@ node scripts/questions_portable_locales.mjs --preview /private/public-preview.js
 ```
 
 This fails on missing or stale translations, removes private cache provenance, and writes new mode-0600
-files. It does not review them. After source-linked review of both files and independent verification of
-the publication review record and live-preview hash, the complete publisher requires those same
-portable files and the private review inputs:
+files. It does not review them. After source-linked review of both files or explicit owner acceptance of
+unreviewed translations, and verification of the publication record and live-preview hash, the complete
+publisher requires those same portable files and the private review inputs:
 
 ```sh
 python3 scripts/publish_data.py publish-questions-preview \

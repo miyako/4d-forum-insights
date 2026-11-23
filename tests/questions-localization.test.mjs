@@ -194,6 +194,15 @@ test('publication preflight binds reviewed preview and locales without publishin
     const result = run();
     assert.equal(result.technical_checks_passed, true);
     assert.equal(result.publication_performed, false);
+    const acceptedUnreviewed = { ...approval(), schema_version: 'questions-private-publication-owner-acceptance-v1',
+      translation_review: false, unreviewed_translations_accepted: true };
+    write('clearance', acceptedUnreviewed);
+    assert.equal(run().technical_checks_passed, true);
+    write('clearance', { ...acceptedUnreviewed, unreviewed_translations_accepted: false });
+    assert.throws(run, /publication review/i);
+    write('clearance', { ...acceptedUnreviewed, schema_version: 'questions-private-publication-review-v1' });
+    assert.throws(run, /publication review/i);
+    write('clearance', approval());
     const french = JSON.parse(fs.readFileSync(files.fr));
     const incomplete = structuredClone(french);
     delete incomplete.entries[1];
