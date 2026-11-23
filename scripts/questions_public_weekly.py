@@ -129,6 +129,11 @@ def preflight_pages(gh, work, candidate):
                   "--data", str(assets), "--allow-complete")
 
 
+def request_pages():
+    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+        output.write("published=true\n")
+
+
 def main():
     if os.environ.get("DATA_PUBLICATION_CHILD") != "1":
         raise ValueError("Public Questions updates require the shared release lease")
@@ -154,7 +159,11 @@ def main():
         overlays = publisher.read_overlays(work / "localization.tar.gz")
         update = json.loads(packet)
         if already_applied(snapshot, overlays, update):
-            print("Cleared update is already in the release; nothing published")
+            publisher.public_questions_overlays(overlays, snapshot, require_complete=True)
+            if os.environ.get("RETRY_PAGES") == "true" and os.environ.get("PUBLICATION_ENABLED") == "true":
+                preflight_pages(gh, work, current)
+                request_pages()
+            print("Cleared update is already in the release; no assets rewritten")
             return
         preview, overlays = staged_update(snapshot, overlays, update, digest(current.read_bytes()), baseline, work)
         preflight_pages(gh, work, work / "staged.json")
@@ -174,8 +183,7 @@ def main():
                                        questions=preview, require_questions=True, reviewed_questions=checked)
         shutil.copyfile(work / "staged.json", current)
         gh.release("upload", "data", str(current), "--clobber")
-        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write("published=true\n")
+        request_pages()
 
 
 if __name__ == "__main__":

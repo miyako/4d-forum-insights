@@ -8,11 +8,19 @@ source/checkpoint pull, delta processing and encrypted saves. Local release
 writers must use the same lease. An interrupted lease is never stolen by age:
 use the existing inspected-owner recovery procedure in [delta setup](delta-setup.md).
 
-**Activation and publication are OFF by default.** No workflow was dispatched,
-data published or Pages deployment performed while implementing this pipeline.
-The immediate initial full-corpus EN/FR/JA publication is owned separately and
-must precede weekly activation. Missing gates fail explicitly, not as successful
-no-op updates.
+**Scheduled processing and publication are OFF by default.** The public baseline
+was seeded from the published EN/FR/JA release and restore-verified on GitHub
+Actions. The private pipeline below is retained for manual use.
+
+To prepare a single new open topic with no replies, dispatch with
+`public_summary`: a JSON object with `id`, `title`, and `body` containing a
+public-safe English paraphrase, not raw forum posts. Only the paraphrase goes
+to OpenAI for one decision and FR/JA translation request. Download and inspect
+the `questions-public-update` artifact before putting it on the `data` release.
+Dispatch its `cleared_update_sha256` to stage it; also set
+`publish_cleared_update` to deploy that exact update manually. Repeating a
+manual publish can retry Pages without rewriting an already-applied update.
+The preparation step does not discover or prepare new topics on a schedule.
 
 ## Dataflow and freshness
 

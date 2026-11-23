@@ -13,6 +13,14 @@ on:
         description: 'SHA-256 of a cleared public update asset; leave blank to verify the checkpoint'
         type: string
         required: false
+      public_summary:
+        description: 'Prepare only: JSON id, title, and already-public English paraphrase (body), no raw posts'
+        type: string
+        required: false
+      publish_cleared_update:
+        description: 'Publish this exact cleared update and deploy Pages (manual only)'
+        type: boolean
+        default: false
       legacy_private:
         description: 'Run the older private workflow instead of the public checkpoint path'
         type: boolean
@@ -28,7 +36,7 @@ concurrency:
 
 jobs:
   public-baseline:
-    if: github.event_name == 'workflow_dispatch' && inputs.baseline_sha256 != ''
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_sha256 != '' && inputs.public_summary == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -43,7 +51,7 @@ jobs:
           python3 scripts/publish_data.py with-lock -- bash pipeline/ci/seed-questions-public-baseline.sh
 
   questions:
-    if: github.event_name == 'workflow_dispatch' && inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.cleared_update_sha256 == ''
+    if: github.event_name == 'workflow_dispatch' && inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.cleared_update_sha256 == '' && inputs.public_summary == ''
     runs-on: ubuntu-latest
     timeout-minutes: 300
     outputs:
@@ -109,8 +117,30 @@ jobs:
           echo 'Local Kev and enrichment; OpenAI redaction and separate review receive only exact cleared display strings, never source identity hints. Only reviewed English enters translation. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Check failing step for readiness, model, checkpoint or publication-review blockers; no deployment occurs on a failed gate.' >> "$GITHUB_STEP_SUMMARY"
 
+  public-prepare:
+    if: github.event_name == 'workflow_dispatch' && inputs.public_summary != '' && !inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.cleared_update_sha256 == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      PUBLIC_SUMMARY: ${{ inputs.public_summary }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+      - run: uv run --project pipeline python scripts/questions_prepare_public_update.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: questions-public-update
+          path: build/public-questions-update/*.json
+          if-no-files-found: error
+          retention-days: 3
+
   public-update:
-    if: (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && !inputs.legacy_private && inputs.baseline_sha256 == '')
+    if: (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && !inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.public_summary == '')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -119,7 +149,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       DB_KEY: ${{ secrets.DB_KEY }}
       CLEARED_UPDATE_SHA256: ${{ github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_CLEARED_UPDATE_SHA256 || inputs.cleared_update_sha256 }}
-      PUBLICATION_ENABLED: ${{ vars.QUESTIONS_WEEKLY_ENABLED == 'true' && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true' }}
+      PUBLICATION_ENABLED: ${{ (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_cleared_update && inputs.cleared_update_sha256 != '') }}
+      RETRY_PAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_cleared_update }}
     steps:
       - uses: actions/checkout@v7
       - name: Restore checkpoint and apply a cleared update
