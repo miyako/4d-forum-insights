@@ -24,6 +24,10 @@ class IncompleteEvidence(ValueError):
     pass
 
 
+class DecisionTimeout(RuntimeError):
+    pass
+
+
 def kev_answers(source, topic_id):
     config = json.loads(Path("config/questions-weekly.json").read_text())
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
@@ -46,6 +50,8 @@ def kev_answers(source, topic_id):
                 raise RuntimeError("Decision server is not serving the configured Kev model")
             result = decider.ask_fitting(lambda budget: questions_corpus.evidence(row, budget)[0])
             answers = questions.display_answers(result["answers"])
+        except questions_corpus.httpx.ReadTimeout as error:
+            raise DecisionTimeout(questions_corpus.safe_error(error)) from None
         except (questions_corpus.httpx.HTTPError, ValueError, KeyError, TypeError) as error:
             raise RuntimeError(questions_corpus.safe_error(error)) from None
     return row, answers

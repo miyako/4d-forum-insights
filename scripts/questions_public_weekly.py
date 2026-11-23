@@ -13,13 +13,18 @@ import tarfile
 import tempfile
 
 import publish_data as publisher
-from questions_weekly_store import encryption
 
 BASELINE = "questions-public-baseline.tar.zst.enc"
 BASELINE_DIGEST = "5ad3ff3fc4d154a3c6f9463fefbb9874ca9a634546730e32041f6abbb44b5aed"
 PREVIEW = "questions/preview.json"
 LOCALES = {locale: f"locales/{locale}/questions.json" for locale in ("fr", "ja")}
 FILES = (PREVIEW, *LOCALES.values())
+
+
+def encryption():
+    if not os.environ.get("DB_KEY"):
+        raise ValueError("checkpoint encryption requires DB_KEY")
+    return ("openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-pass", "env:DB_KEY")
 
 
 def digest(data):

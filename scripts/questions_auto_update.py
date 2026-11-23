@@ -82,7 +82,7 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
     locales = {locale: {"version": 1, "locale": locale, "page": "questions", "entries": {}}
                for locale in weekly.LOCALES}
     pending = {"index or source": 0, "missing or invalid English display": 0, "credential pattern": 0,
-               "batch limit": 0}
+               "Kev timeout": 0, "batch limit": 0}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
         rows = con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
@@ -119,12 +119,16 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
             if not started:
                 start_kev()
                 started = True
+            attempted += 1
             try:
                 evidence, answers = prepare.kev_answers(source, topic_id)
             except prepare.IncompleteEvidence:
                 pending["index or source"] += 1
                 continue
-            attempted += 1
+            except prepare.DecisionTimeout:
+                pending["Kev timeout"] += 1
+                print(f"::warning::Kev timed out for topic {topic_id}; it remains pending")
+                continue
             entry = prepare.public_row(topic, evidence, answers, display)
             entry["source_checked_at"] = export_date
             if cached is None:
@@ -135,6 +139,8 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
             entries.append(entry)
     print(f"Questions: {len(entries)} prepared; pending by reason: {json.dumps(pending, sort_keys=True)}")
     if not entries:
+        if pending["Kev timeout"]:
+            raise RuntimeError("Kev timed out; no Questions updates were prepared")
         return None
     return {"schema": "questions-cleared-update-v1",
             "base_sha256": weekly.digest((work / "questions-preview.json").read_bytes()),
