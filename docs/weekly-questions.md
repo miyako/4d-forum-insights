@@ -199,6 +199,13 @@ traversal, symlinks, unexpected files and inconsistent membership. Push refuses
 a missing seed, preserves `questions-weekly.prev.tar.zst.enc`, and never uploads
 an unencrypted checkpoint.
 
+To preserve the initial baseline locally before it qualifies for CI, supply
+`DB_KEY` through the environment and run
+`python3 scripts/questions_weekly_store.py backup PRIVATE_CHECKPOINT NEW_ARCHIVE`.
+This requires the frozen ratings and delta baseline, verifies a local restore,
+and neither uploads the archive nor treats missing review records as approvals.
+The release `push` and workflow readiness checks are unchanged.
+
 For local inference, first create a new independent **durable** SQLite backup
 outside the disposable checkout with
 `uv run --project pipeline python scripts/questions_weekly.py backup`.

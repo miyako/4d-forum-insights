@@ -16,6 +16,8 @@ ASSET = "questions-weekly.tar.zst.enc"
 FILES = {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json", "translation-reviews.json",
          "publication-review.json", "ui-publication-review.json", "status.json", "delta-source.json"}
 PREFIXES = ("locales/", "portable-locales/", "embedding/", "publication/")
+BASELINE_FILES = {"ratings.db", "delta-source.json"}
+RUNNABLE_FILES = BASELINE_FILES | {"display.db", "readiness.json", "evaluation.json", "reviews.json"}
 
 
 def allowed(name):
@@ -33,7 +35,7 @@ def checksum(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def pack(root, directory):
+def pack(root, directory, *, required=RUNNABLE_FILES):
     root, directory = Path(root), Path(directory)
     staged = directory / "staged"
     staged.mkdir()
@@ -54,20 +56,20 @@ def pack(root, directory):
             with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as original, \
                     closing(sqlite3.connect(target)) as copy:
                 original.backup(copy)
+                if copy.execute("PRAGMA journal_mode=DELETE").fetchone() != ("delete",):
+                    raise ValueError("checkpoint SQLite copy must be standalone")
                 if copy.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise ValueError("checkpoint SQLite integrity failed")
         else:
             target.write_bytes(source.read_bytes())
         hashes[name] = checksum(target)
-    if not {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json",
-            "delta-source.json"} <= hashes.keys():
-        raise ValueError("checkpoint is incomplete; explicit encrypted seed required")
+    if not required <= hashes.keys():
+        raise ValueError("checkpoint is missing required files")
     (staged / "checksums.json").write_text(json.dumps(hashes, sort_keys=True))
     archive = directory / "checkpoint.tar"
     with tarfile.open(archive, "w") as tar:
-        for source in sorted(staged.rglob("*")):
-            if source.is_file():
-                tar.add(source, arcname=source.relative_to(staged).as_posix(), recursive=False)
+        for name in sorted({*hashes, "checksums.json"}):
+            tar.add(staged / name, arcname=name, recursive=False)
     return archive
 
 
@@ -105,28 +107,56 @@ def unpack(archive, root):
     (root / "checksums.json").unlink()
 
 
+def encryption():
+    if not os.environ.get("DB_KEY"):
+        raise ValueError("checkpoint encryption requires DB_KEY")
+    return ("openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-pass", "env:DB_KEY")
+
+
+def encrypt(archive, output):
+    compressed = str(archive) + ".zst"
+    run("zstd", "-q", "-T2", str(archive), "-o", compressed)
+    run(*encryption(), "-salt", "-in", compressed, "-out", str(output))
+
+
+def restore(encrypted, root, directory):
+    compressed = directory / "restored.tar.zst"
+    archive = directory / "restored.tar"
+    run(*encryption(), "-d", "-in", str(encrypted), "-out", str(compressed))
+    run("zstd", "-d", "-q", str(compressed), "-o", str(archive))
+    unpack(archive, root)
+
+
+def backup(root, output):
+    output = Path(output)
+    with tempfile.TemporaryDirectory(prefix=".questions-backup-", dir=output.parent) as temp:
+        directory = Path(temp)
+        encrypted = directory / ASSET
+        encrypt(pack(root, directory, required=BASELINE_FILES), encrypted)
+        restore(encrypted, directory / "verified", directory)
+        encrypted.chmod(0o600)
+        os.link(encrypted, output)  # Publish locally without ever replacing an existing backup.
+
+
 def main():
+    os.umask(0o077)
+    if len(sys.argv) == 4 and sys.argv[1] == "backup":
+        backup(sys.argv[2], sys.argv[3])
+        print("Local Questions backup encrypted and restore verified; no workflow activation")
+        return
     if len(sys.argv) != 3 or sys.argv[1] not in ("pull", "push"):
-        raise ValueError("usage: questions_weekly_store.py pull|push CHECKPOINT_DIRECTORY")
+        raise ValueError("usage: questions_weekly_store.py pull|push CHECKPOINT_DIRECTORY | backup CHECKPOINT_DIRECTORY ARCHIVE")
     if os.environ.get("DATA_PUBLICATION_CHILD") != "1" or not os.environ.get("DB_KEY"):
         raise ValueError("checkpoint storage requires DB_KEY and shared publication lease")
     command, root = sys.argv[1], Path(sys.argv[2])
-    os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="questions-store-", dir=os.environ.get("RUNNER_TEMP")) as temp:
         directory = Path(temp)
         encrypted = directory / ASSET
-        enc = ("openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000", "-pass", "env:DB_KEY")
         if command == "pull":
             run("gh", "release", "download", "data", "--pattern", ASSET, "--dir", str(directory))
-            compressed = directory / "checkpoint.tar.zst"
-            run(*enc, "-d", "-in", str(encrypted), "-out", str(compressed))
-            archive = directory / "checkpoint.tar"
-            run("zstd", "-d", "-q", str(compressed), "-o", str(archive))
-            unpack(archive, root)
+            restore(encrypted, root, directory)
         else:
-            archive = pack(root, directory)
-            run("zstd", "-q", "-T2", str(archive), "-o", str(archive) + ".zst")
-            run(*enc, "-salt", "-in", str(archive) + ".zst", "-out", str(encrypted))
+            encrypt(pack(root, directory), encrypted)
             previous = directory / "previous"
             previous.mkdir()
             # A missing seed is a blocker, not permission to replace/reconstruct private results.

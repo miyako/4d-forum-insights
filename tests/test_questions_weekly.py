@@ -3,7 +3,9 @@
 from contextlib import closing, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -513,6 +515,22 @@ class WeeklyTests(unittest.TestCase):
             tar.addfile(item, io.BytesIO(b""))
         with self.assertRaises(ValueError):
             store.unpack(unsafe, Path(self.temp.name) / "unsafe-restore")
+
+    @unittest.skipUnless(shutil.which("zstd") and shutil.which("openssl"), "requires zstd and openssl")
+    def test_local_encrypted_baseline_backup_needs_no_review_and_cannot_overwrite(self):
+        for name in ("display.db", "readiness.json", "evaluation.json", "reviews.json"):
+            (self.root / name).unlink()
+        output = Path(self.temp.name) / store.ASSET
+        with patch.dict(os.environ, {"DB_KEY": "test-only-passphrase"}):
+            store.backup(self.root, output)
+            before = output.read_bytes()
+            with self.assertRaises(FileExistsError):
+                store.backup(self.root, output)
+            self.assertEqual(output.read_bytes(), before)
+            store.restore(output, Path(self.temp.name) / "restored-baseline", Path(self.temp.name))
+        self.assertFalse((Path(self.temp.name) / "restored-baseline/readiness.json").exists())
+        with self.assertRaisesRegex(ValueError, "required files"):
+            store.pack(self.root, Path(self.temp.name))
 
 
 if __name__ == "__main__":
