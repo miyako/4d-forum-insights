@@ -199,10 +199,11 @@ must contain only publication-ready data (not source posts or review evidence):
 `questions-preview.json` release asset hash), `source_selected_at` (an advancing
 ISO timestamp), `entries` (canonical public rows to insert or replace), and
 `locales` (the `fr` and `ja` portable overlay documents for exactly those rows).
-This workflow does not author or clear the packet. It preserves all other rows,
-validates complete locale and semantic-index coverage, and uses the shared
-publication lease. Without both weekly flags it cannot publish. The older raw
-source workflow is now a separate manual path (`legacy_private`).
+The application job preserves all other rows, validates complete locale and
+semantic-index coverage, and uses the shared publication lease. Scheduled
+publication requires both weekly flags. Manual publication requires the
+explicit `publish_cleared_update` input and the exact packet digest. The older
+raw source workflow is a separate manual path (`legacy_private`).
 
 An authorized owner must first consolidate the reviewed source-backed ratings,
 cleared displays and FR/JA caches into an encrypted checkpoint. This code does
