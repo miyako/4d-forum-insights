@@ -304,6 +304,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
     if (!elements.has(selector)) elements.set(selector, element());
     return elements.get(selector);
   };
+  get('#preview').hidden = true;
   const modes = ['kw', 'hyb', 'sem'].map((mode) => ({ ...element(), dataset: { mode } }));
   const document = {
     body: element(), documentElement: element(), querySelector: get,
@@ -317,7 +318,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   const context = {
     ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure, loadOverlay,
     installLocale: (i18n, page) => installLocale(i18n, page, document, location),
-    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: publication.endsWith('complete') ? 3 : 5, corpus_complete: publication.endsWith('complete'), source_selected_at: '2026-11-12T04:16:20Z', preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
+    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: publication.endsWith('complete') ? 3 : 5, corpus_complete: publication.endsWith('complete'), ...(publication === 'public-complete' ? { source_selected_at: '2026-11-12T04:16:20Z' } : {}), preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
     getJSON: async (file) => file.startsWith('locales/') ? {
       version: 1, page: 'questions', locale, entries: translation === 'missing' ? {} : {
         1: { source_hash: translation === 'stale' ? '0'.repeat(64) : sourceHash({ title: row().title, body: row().body }),
@@ -328,7 +329,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
       },
     } : ({ ...data(row(1, { accepted: true, closed: true, replies: 0 }),
       ...(isProcessed ? [row(2, { replies: 0 }), row(3, { answers: { ...row().answers, has_question: { noul: .49 } } })] : [])),
-      public_preview: isPublic, private_preview: !isPublic, publish_allowed: isPublic }),
+      generated_at: '2026-11-22T09:04:28Z', public_preview: isPublic, private_preview: !isPublic, publish_allowed: isPublic }),
     Semantic: class { available = false; },
     document, location, console, URLSearchParams, setTimeout,
     window: { history: { pushState: navigate, replaceState: navigate }, addEventListener: (name, callback) => events.set(name, callback) },
@@ -338,9 +339,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   vm.runInNewContext(source + '\nglobalThis.ready = init(); globalThis.api = { app, update, controls, searchSemantic };', context);
   await context.ready;
   assert.equal(context.api.app.ready, true);
-  const banner = publication === 'public-complete'
-    ? 'Complete frozen snapshot, source selected {date}: {count} records, {questions} eligible questions. This is not the current forum; model assessments are unreviewed and semantic search is disabled.'
-    : publication === 'public-processed'
+  const banner = publication === 'public-processed'
     ? 'Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.'
     : publication === 'public'
     ? 'Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.'
@@ -349,7 +348,14 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
     : publication === 'processed'
     ? 'Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.'
     : 'Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.';
-  assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: isProcessed ? '3' : '1', questions: '2', total: '5', date: '2026-11-12T04:16:20Z' }));
+  if (publication === 'public-complete') {
+    assert.equal(get('#preview').hidden, true);
+  } else {
+    assert.equal(get('#preview').textContent, createLocale(locale).t(banner, { count: isProcessed ? '3' : '1', questions: '2', total: '5' }));
+  }
+  assert.equal(get('#footer').textContent, createLocale(locale).t('Last updated: {date}', {
+    date: createLocale(locale).date(Date.parse(publication === 'public-complete' ? '2026-11-12T04:16:20Z' : '2026-11-22T09:04:28Z') / 864e5),
+  }));
   assert.equal(context.api.app.items.length, isProcessed ? 2 : 1);
   if (locale !== 'en') assert.equal(get('#translation-coverage').textContent,
     createLocale(locale).t('{current} of {total} records translated; {eligibleCurrent} of {eligible} eligible questions translated. Missing or stale records use labelled English fallback.', {

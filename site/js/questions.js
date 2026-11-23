@@ -62,22 +62,25 @@ async function init() {
       if (data.public_preview !== true || data.publish_allowed !== true || data.private_preview !== false) {
         throw new Error('Public Questions preview requires publication-approved data');
       }
-      $('#preview').hidden = false;
-      $('#preview').classList.add('warn');
-      $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
-        ? tr(manifest.questions_view.corpus_complete === true
-          ? 'Complete frozen snapshot, source selected {date}: {count} records, {questions} eligible questions. This is not the current forum; model assessments are unreviewed and semantic search is disabled.'
-          : 'Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', {
-          count: num.format(data.entries.length), total: num.format(manifest.questions_view.corpus_total),
-          questions: num.format(app.items.length), date: manifest.questions_view.source_selected_at,
-        })
-        : tr('Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.', { count: num.format(data.entries.length) });
+      if (manifest.questions_view.corpus_complete !== true) {
+        $('#preview').hidden = false;
+        $('#preview').classList.add('warn');
+        $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
+          ? tr('Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', {
+            count: num.format(data.entries.length), total: num.format(manifest.questions_view.corpus_total),
+            questions: num.format(app.items.length),
+          })
+          : tr('Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.', { count: num.format(data.entries.length) });
+      }
     }
     $('#semantic-disclosure').textContent = app.semantic.available ? modelDisclosure(manifest.embeddings, i18n) : tr('Semantic search is unavailable in this preview; keyword search is ready.');
     for (const button of document.querySelectorAll('[data-mode]')) {
       button.disabled = button.dataset.mode !== 'kw' && !app.semantic.available;
     }
-    $('#footer').textContent = tr('Unreviewed decision-model assessments. Consult the original thread; no claim that an old issue persists in current 4D versions.');
+    const updated = Date.parse(manifest.questions_view.source_selected_at || data.generated_at);
+    $('#footer').textContent = Number.isFinite(updated)
+      ? tr('Last updated: {date}', { date: i18n.date(updated / 864e5) })
+      : '';
     app.ready = true;
     controls();
     update({ replace: true });

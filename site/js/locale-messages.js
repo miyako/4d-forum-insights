@@ -183,7 +183,7 @@ const rows = [
   ['{count} knowledge-base entries written by a local model; area and type by', '{count} fiches rédigées par un modèle local ; domaine et type évalués par', 'ローカルモデルが生成した記事{count}件。分野と種類の分類モデル：'],
   ['Entries are machine-generated from public threads on', 'Les fiches sont générées automatiquement à partir de fils publics sur', '記事は次のサイトの公開スレッドから機械生成されています：'],
   ['The forum posts themselves are not republished.', 'Les messages du forum ne sont pas republiés.', 'フォーラムの投稿自体は転載していません。'],
-  ['Data', 'Données', 'データ'], ['Source', 'Code source', 'ソース'],
+  ['Data', 'Données', 'データ'], ['Last updated: {date}', 'Dernière mise à jour : {date}', '最終更新日：{date}'], ['Source', 'Code source', 'ソース'],
   ['{count} discussions out of {total} lively threads rated by', '{count} discussions sur {total} fils animés évalués par', '活発なスレッド{total}件中{count}件のディスカッション。評価モデル：'],
   ['Summaries written by a local model', 'Résumés rédigés par un modèle local', '要約はローカルモデルが生成'],
   ['Participants are never named; the summaries are machine-generated from public threads on', 'Les participants ne sont jamais nommés ; les résumés sont générés automatiquement à partir de fils publics sur', '参加者の名前は記載しません。要約は次のサイトの公開スレッドから機械生成されています：'],
