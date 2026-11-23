@@ -186,6 +186,116 @@ clarification:{noul:.1},...Object.fromEntries(Object.keys(DOMAINS).map(key=>['do
         with self.assertRaisesRegex(ValueError, "Incomplete fr"):
             publisher.check_questions_localization(source)
 
+    def test_complete_snapshot_requires_opt_in_and_complete_source_bound_locales(self):
+        source = self.source()
+        english = self.root / "site-data.tar.gz"
+        publisher.pack_site(source, english)
+        candidate, questions = self.public_questions()
+        prior_bytes = candidate.read_bytes()
+        questions.update(schema_version="questions-ui-public-complete-v1", corpus_total=2,
+                         corpus_complete=True, source_selected_at="2026-11-12T04:16:20Z")
+        for entry in questions["entries"]:
+            entry["answers"]["version_dependent"] = {"noul": 0.1}
+            entry["evidence_warnings"] = []
+            entry["decision_model"] = "private provenance"
+        candidate.write_text(json.dumps(questions))
+        store = self.root / "questions-store"
+        for locale in ("fr", "ja"):
+            (store / locale).mkdir(parents=True)
+            overlay = {"version": 1, "locale": locale, "page": "questions", "entries": {
+                key: {"source_hash": digest, "translation_version": "1",
+                      "fields": {"title": "Titre", "body": "Résumé"}}
+                for key, digest in publisher.questions_hashes(questions).items()
+            }}
+            (store / locale / "questions.json").write_text(json.dumps(overlay))
+        gh = FakeGitHub()
+        gh.assets["site-data.tar.gz"] = english.read_bytes()
+        directory = self.root / "attempt"
+        directory.mkdir()
+        with self.assertRaisesRegex(ValueError, "explicit opt-in"):
+            publisher.publish_questions_preview(gh, "data", candidate, store, directory, set(gh.assets))
+        with self.assertRaisesRegex(ValueError, "bound publication review"):
+            publisher.publish_questions_preview(gh, "data", candidate, store, directory, set(gh.assets),
+                                                allow_complete=True)
+        candidate.write_text(json.dumps(publisher.read_public_questions(candidate), ensure_ascii=False) + "\n")
+        questions = json.loads(candidate.read_text())
+        private = self.root / "private-candidate.json"
+        private.write_text(json.dumps({**questions, "schema_version": "questions-ui-private-preview-v1",
+                                       "private_preview": True, "publish_allowed": False}, ensure_ascii=False))
+        sha = lambda file: hashlib.sha256(file.read_bytes()).hexdigest()
+        audit = self.root / "audit.json"
+        audit.write_text(json.dumps({"schema_version": "questions-export-private-audit-v1",
+                                     "candidate_sha256": sha(private), "privacy_review_required": True,
+                                     "publication_authorized": False, "processed_count": 2,
+                                     "eligible_question_count": 1, "corpus_total": 2, "corpus_complete": True}))
+        gh.assets["questions-preview.json"] = prior_bytes
+        base_sha = hashlib.sha256(prior_bytes).hexdigest()
+        clearance = self.root / "clearance.json"
+        approval = {"schema_version": "questions-private-publication-review-v1",
+                    "candidate_sha256": sha(private), "audit_sha256": sha(audit),
+                    "preview_sha256": sha(candidate), "fr_sha256": sha(store / "fr/questions.json"),
+                    "ja_sha256": sha(store / "ja/questions.json"), "source_linked_privacy_review": True,
+                    "translation_review": True, "publication_authorized": True, "reviewer": "reviewer",
+                    "reviewed_at": "2026-11-21T00:00:00Z", "expected_current_preview_sha256": base_sha}
+        clearance.write_text(json.dumps(approval))
+        review = {"candidate": private, "audit": audit, "clearance": clearance,
+                  "clearance_sha256": sha(clearance)}
+        japanese = store / "ja/questions.json"
+        complete_japanese = japanese.read_text()
+        missing = json.loads(complete_japanese)
+        del missing["entries"]["2"]
+        japanese.write_text(json.dumps(missing))
+        with self.assertRaises(subprocess.CalledProcessError):
+            publisher.publish_questions_preview(gh, "data", candidate, store, directory, set(gh.assets),
+                                                expected_preview_hash=base_sha, allow_complete=True, review=review)
+        self.assertEqual(set(gh.assets), {"site-data.tar.gz", "questions-preview.json"})
+        japanese.write_text(complete_japanese)
+        french = store / "fr/questions.json"
+        original_french = french.read_text()
+        nonportable = json.loads(original_french)
+        nonportable["entries"]["1"]["field_sources"] = {"private": "/private/path"}
+        french.write_text(json.dumps(nonportable))
+        changed_approval = {**approval, "fr_sha256": sha(french)}
+        clearance.write_text(json.dumps(changed_approval))
+        review["clearance_sha256"] = sha(clearance)
+        other_attempt = self.root / "nonportable"
+        other_attempt.mkdir()
+        with self.assertRaisesRegex(ValueError, "differs from reviewed artifact"):
+            publisher.publish_questions_preview(gh, "data", candidate, store, other_attempt, set(gh.assets),
+                                                expected_preview_hash=base_sha, allow_complete=True, review=review)
+        self.assertEqual(set(gh.assets), {"site-data.tar.gz", "questions-preview.json"})
+        french.write_text(original_french)
+        clearance.write_text(json.dumps(approval))
+        review["clearance_sha256"] = sha(clearance)
+        (source / "questions").mkdir()
+        (source / "questions/preview.json").write_text(candidate.read_text())
+        manifest_path = source / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["questions_view"] = {"public_preview": True, "snapshot_scope": "processed",
+                                     "files": {"entries": "questions/preview.json"}}
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "Incomplete fr"):
+            publisher.check_questions_localization(source)
+        shutil.copytree(store, source / "locales", dirs_exist_ok=True)
+        publisher.check_questions_localization(source)
+        shutil.rmtree(directory)
+        directory.mkdir()
+        publisher.publish_questions_preview(gh, "data", candidate, store, directory, set(gh.assets),
+                                            expected_preview_hash=base_sha, allow_complete=True, review=review)
+        self.assertEqual(gh.assets["questions-preview.json"], candidate.read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(gh.assets["localization.tar.gz"]), mode="r:gz") as archive:
+            for locale in ("fr", "ja"):
+                self.assertEqual(archive.extractfile(f"data/locales/{locale}/questions.json").read(),
+                                 (store / locale / "questions.json").read_bytes())
+        published = json.loads(gh.assets["questions-preview.json"])
+        self.assertTrue(published["corpus_complete"])
+        self.assertNotIn("decision_model", published["entries"][0])
+        partial, _ = self.public_questions()
+        attempt = self.root / "downgrade"
+        attempt.mkdir()
+        with self.assertRaisesRegex(ValueError, "complete Questions snapshot"):
+            publisher.publish_questions_preview(gh, "data", partial, store, attempt, set(gh.assets))
+
     def test_questions_overlays_reuse_canonical_title_body_in_prepare_and_final_archive(self):
         source = self.source()
         manifest_path = source / "manifest.json"

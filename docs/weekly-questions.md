@@ -56,10 +56,18 @@ no-op updates.
    offsets are not blindly corrected. OP metadata changes invalidate PI freshness
    even when Questions decision evidence is unchanged.
 5. Reuse successful display proposals only with exact source/decision/model/
-   prompt/rule freshness. An independent source-linked exact-hash display review
-   is required before translation. Changed source or model/prompt/rules makes
-   the previous approval stale even if display wording happens to be identical.
-   Failed/stale rows cannot enter the translation dataset.
+   prompt/rule freshness. `questions_weekly_review.py english` makes a separate
+   OpenAI request for each unreviewed title/body, comparing original English
+   against the deterministically redacted proposal. It does not reuse the
+   redactor's judgment or send raw forum posts. Only matching source identity
+   hints accompany the bounded display pair. Explicit privacy, meaning and
+   uncertainty booleans must pass, with exact response-model and proof hashes.
+   Rejects remain held; transport/schema failures have at most two durable
+   attempts. Successful field proofs are independently cached in `display.db`.
+   Both fields must pass before `reviews.json` permits translation. Changed
+   source or model/prompt/rules makes approval stale even with identical wording.
+   Separate requests to the same model do not guarantee uncorrelated errors;
+   measured evaluation and fail-closed guards remain necessary.
 6. Existing `backfill-requests.mjs --page questions` sends **only cleared display strings**
    to OpenAI using `OPENAI_API_KEY`, `OPENAI_MODEL` and optional
    `LOCALIZATION_REASONING_EFFORT`. Neither raw posts nor private identity hints,
@@ -74,12 +82,23 @@ no-op updates.
    The vectors remain private checkpoint data for future Questions semantic
    integration; this workflow does not change the currently disabled public
    Questions semantic contract or Requests vectors.
-8. Always save consistent encrypted partial results and the updated encrypted
-   working source. The previous encrypted checkpoint is retained. Only after a
-   separate full-snapshot publication review can the existing Questions
-   publisher update its preview/locales assets and the existing Pages workflow
-   run. It never uploads the private embedding manifest or checkpoint as site
-   data, and never overwrites `site-data.tar.gz`.
+8. `questions_weekly_review.py translations` independently compares FR/JA
+   fields to cleared English using the same bounded request transport, a
+   separate review prompt and source-linked local guards. Only new or changed
+   field bindings need requests. Two accepted fields produce a hash-bound
+   locale record in `translation-reviews.json`. Changed translations invalidate
+   only their changed field proofs; missing, rejected and uncertain outputs
+   cannot enter publication.
+9. Always save consistent encrypted partial results and the updated encrypted
+   working source. The previous encrypted checkpoint is retained. Under the
+   publication lease, rebuild the complete candidate from current ratings and
+   displays, validate English and both locale proof records, and bind a new
+   publication review to those exact bytes and the current complete live asset.
+   Persist that review bundle encrypted before public asset changes. The shared
+   full-corpus/locale preflight and live-asset CAS still run; no per-update human
+   approval file or repository-variable edit is needed. Failed checks stop
+   publication. No private embedding manifest/checkpoint becomes site data, and
+   `site-data.tar.gz` is never replaced by this path.
 
 `manifest.questions` remains the Requests classification array.
 `manifest.questions_view.files.entries` remains the Questions data contract.
@@ -126,8 +145,20 @@ current field cache reports known API usage and calls; retries, errors without
 usage and interrupted calls may have unknown cost, and changing a field discards
 its older cache totals. Provider billing is authoritative; do not treat these
 partial counters as total spend.
-The job's 300-minute limit leaves room for setup, lease acquisition and encrypted
-saves. A hard runner termination cannot guarantee an exit trap; restore the last
+
+Independent review adds at most 200 English fields and 200 fields per target
+locale per run. Each field has at most two durable attempts with at most two
+HTTP calls per attempt: at most 2,400 review calls plus 800 redaction calls,
+before the separate translation budget. Each request is limited to 2,400
+completion tokens, 120 seconds and a 32,000-character serialized input.
+Each display string is limited to 12,000 characters; hints are limited to
+4,000. English review has a 30-minute budget, as does each target locale.
+These are upper bounds, not expected usage or a spend guarantee. The job's
+overall deadline can interrupt individual stage budgets; encrypted partial
+progress is retained where the exit handler can run.
+The job's 300-minute limit supersedes the sum of stage budgets; setup, lease
+acquisition and encrypted saves also consume that time. A hard runner
+termination cannot guarantee an exit trap; restore the last
 verified encrypted checkpoint and inspect any surviving lease. No Copilot token
 or new self-hosted runner is needed. Logs/unencrypted DBs are never uploaded as
 Actions artifacts or public release assets.
@@ -143,9 +174,11 @@ Its stable layout is:
 ratings.db                   # existing corpus_state/decisions/attempts schema
 display.db                   # displays table from scripts/questions_weekly.py
                              # plus independent display_fields proposal slots
+                             # and EN/FR/JA review_fields proof slots
 readiness.json
 evaluation.json
 reviews.json
+translation-reviews.json     # independent FR/JA field review bindings
 delta-source.json            # reviewed initial raw hashes + pending enrichment/redaction IDs
 locales/fr/questions.json    # existing overlay contract
 locales/ja/questions.json
@@ -180,6 +213,7 @@ blanket authorization for future deltas:
 - `readiness.json`: schema `questions-weekly-readiness-v1`, `identity` from
   `questions_weekly.identity(config)`, `initial_en_fr_ja_published:true`,
   `weekly_private_processing_authorized:true`, `openai_redaction_authorized:true`,
+  `automated_review_authorized:true`, `weekly_publication_authorized:true`,
   `evaluation_sha256`, nonempty
   `reviewer`, timezone-aware `reviewed_at`, `raw_delta_seed_sha256` matching
   `delta-source.json.initial_baseline_sha256`. The seeded corpus runtime must also
@@ -207,8 +241,17 @@ weekly run from treating the old full-corpus backlog as new delta work.
   `source_hash`, `freshness_hash`, `display_hash`, `audit_hash` from `display.db`,
   `source_linked:true`, `technical_meaning_preserved:true`,
   `privacy_cleared:true`, `openai_authorized:true`, `reviewer`, `reviewed_at`.
-  Reviews may be AI-assisted but must identify their provenance honestly;
-  scan-only or self-generated automatic clearance is not independent review.
+  Automated records additionally bind `automated_review_version` and the two
+  field `proof_sha256` values to separate hosted review responses. A successful
+  redaction or local scan alone cannot create these records.
+- `translation-reviews.json`: schema `questions-weekly-translation-reviews-v1`,
+  `entries` keyed by `fr:ID` / `ja:ID`. Each record has schema
+  `questions-weekly-translation-review-v1`, locale, identity, source/freshness/
+  display/audit hashes, `translation_hash`, source-linked privacy/meaning flags,
+  reviewer/time and separate field proofs. Initial already-reviewed English
+  and FR/JA records must be explicitly reconciled into the seed, with honest
+  original review provenance and exact current bindings. Do not automatically
+  certify or re-review the old corpus merely because caches exist.
 - `publication-review.json`: schema `questions-weekly-publication-review-v1`,
   same `identity`, `source_linked:true`, `translated_fields_reviewed:true`,
   `complete_current_locales:true`, `publication_authorized:true`,
@@ -217,9 +260,13 @@ weekly run from treating the old full-corpus backlog as new delta work.
   paths `publication/candidate.json`, `publication/audit.json`,
   `publication/public-preview.json`, `portable-locales/fr/questions.json`,
   `portable-locales/ja/questions.json`, plus `ui_review_sha256` binding the shared
-  UI preflight's `ui-publication-review.json`. Set the independently verified byte hash of this
-  review as repository variable `QUESTIONS_WEEKLY_PUBLICATION_REVIEW_SHA256`.
-  A new/edited candidate requires a fresh review, not a timestamp-only update.
+  UI preflight's `ui-publication-review.json`. Automated reviews additionally
+  bind the English and translation-review file hashes and review protocol.
+  The standard workflow creates this record only after all current independent
+  checks pass; it does not require `QUESTIONS_WEEKLY_PUBLICATION_REVIEW_SHA256`.
+  The legacy explicit-hash argument remains supported for separately reviewed
+  manual invocations. New/edited fields need new independent checks, not
+  timestamp-only renewal.
 
 The shared `questions-private-publication-review-v1` UI clearance separately
 binds `candidate_sha256`, `audit_sha256`, `preview_sha256`, `fr_sha256`,
@@ -232,9 +279,9 @@ weekly gate adds current durable-source/model/evaluation freshness; it does
 not bypass that shared preflight.
 
 Set `QUESTIONS_WEEKLY_ENABLED=true` **only after** initial full-corpus EN/FR/JA
-publication, measured source-linked redaction approval and encrypted seeding.
-Separately set `QUESTIONS_WEEKLY_PUBLICATION_ENABLED=true` only after the weekly
-publication review and UI complete-preview gate are ready. The existing UI
+publication, measured source-linked redaction/review approval and encrypted seeding.
+Separately set `QUESTIONS_WEEKLY_PUBLICATION_ENABLED=true` only after the seeded
+publication authorization and an end-to-end trial are verified. The existing UI
 config's `complete_enabled` must be enabled by its owner. Missing/held source,
 ratings or display records prevent complete candidate construction. Missing/
 stale locales, changed review bytes, source-linked PI findings, changed durable
@@ -253,8 +300,10 @@ freshness. Existing initial approvals cannot be automatically reissued under the
 new identity; owners must reconcile already-cleared full-corpus display/locale
 assets and review bindings without sending the old corpus for automatic redaction.
 The initial raw-delta seed must be recaptured with OP identity included, under
-review and before activation. Independent review is still an external prerequisite:
-the workflow consumes exact-hash approvals; it does not author them.
+review and before activation. The standard workflow now authors per-update reviews from separate independent
+OpenAI checks. Initial-release review provenance, held-out evaluation and
+bootstrap publication authorization remain external prerequisites; this code
+does not manufacture them or infer them from completed processing.
 
 `questions_weekly.py status` writes private `status.json` with mutually exclusive
 per-topic stage counts, per-source-language counts, unresolved display/review

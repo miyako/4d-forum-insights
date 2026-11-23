@@ -1,0 +1,65 @@
+# Disabled unless explicitly enabled after the private checkpoint and pinned runtime are reviewed.
+# This updates encrypted classification state only; it never publishes Questions or translations.
+name: Questions checkpoint update
+
+on:
+  schedule:
+    - cron: '17 0 * * 2' # Tuesday 00:17 UTC, after the Monday delta
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: questions-checkpoint
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: vars.QUESTIONS_AUTOMATION_ENABLED == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: [self-hosted, questions-private]
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DB_KEY: ${{ secrets.DB_KEY }}
+      QUESTIONS_RUNTIME: ${{ vars.QUESTIONS_RUNTIME_MANIFEST }}
+      QUESTIONS_RUNTIME_SHA256: ${{ vars.QUESTIONS_RUNTIME_SHA256 }}
+      QUESTIONS_SERVER: ${{ vars.QUESTIONS_SERVER_PATH }}
+      QUESTIONS_WEIGHTS: ${{ vars.QUESTIONS_WEIGHTS_PATH }}
+      QUESTIONS_PRIVATE_DIR: ${{ vars.QUESTIONS_PRIVATE_DIR }}
+      QUESTIONS_LIMIT: ${{ vars.QUESTIONS_BATCH_LIMIT || '100' }}
+      QUESTIONS_MINUTES: ${{ vars.QUESTIONS_BATCH_MINUTES || '120' }}
+      QUESTIONS_MAX_STALE: ${{ vars.QUESTIONS_MAX_STALE || '0' }}
+      QUESTIONS_MAX_NEW: ${{ vars.QUESTIONS_MAX_NEW || '0' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - name: Check private runner prerequisites
+        run: |
+          set -euo pipefail
+          : "${DB_KEY:?set DB_KEY}"
+          : "${QUESTIONS_RUNTIME:?set QUESTIONS_RUNTIME_MANIFEST}"
+          : "${QUESTIONS_RUNTIME_SHA256:?set QUESTIONS_RUNTIME_SHA256}"
+          : "${QUESTIONS_SERVER:?set QUESTIONS_SERVER_PATH}"
+          : "${QUESTIONS_WEIGHTS:?set QUESTIONS_WEIGHTS_PATH}"
+          : "${QUESTIONS_PRIVATE_DIR:?set QUESTIONS_PRIVATE_DIR}"
+          command -v gh >/dev/null
+          command -v openssl >/dev/null
+          command -v zstd >/dev/null
+      - name: Update encrypted checkpoint
+        run: |
+          set -euo pipefail
+          umask 077
+          uv run -q --project pipeline python scripts/questions_update.py \
+            --runtime "$QUESTIONS_RUNTIME" --runtime-sha256 "$QUESTIONS_RUNTIME_SHA256" \
+            --executable "$QUESTIONS_SERVER" --weights "$QUESTIONS_WEIGHTS" \
+            --limit "$QUESTIONS_LIMIT" --minutes "$QUESTIONS_MINUTES" \
+            --max-stale "$QUESTIONS_MAX_STALE" --max-new "$QUESTIONS_MAX_NEW" \
+            --output "$QUESTIONS_PRIVATE_DIR/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"

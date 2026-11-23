@@ -21,7 +21,22 @@ export function adaptPreview(snapshot) {
       decision_model: row.decision_model, decision_version: row.decision_version,
     })),
   };
-  buildQuestions(data);
+  const eligible = buildQuestions(data).length;
+  if (snapshot.snapshot_scope === 'processed'
+    && ['processed_count', 'eligible_question_count', 'corpus_complete'].some((key) => Object.hasOwn(snapshot, key))) {
+    if (typeof snapshot.generated_at !== 'string' || !Number.isFinite(Date.parse(snapshot.generated_at))
+      || !Number.isSafeInteger(snapshot.corpus_total) || snapshot.corpus_total < 1
+      || snapshot.processed_count !== data.entries.length || snapshot.processed_count > snapshot.corpus_total
+      || snapshot.eligible_question_count !== eligible || typeof snapshot.corpus_complete !== 'boolean'
+      || snapshot.corpus_complete !== (snapshot.processed_count === snapshot.corpus_total)) {
+      throw new Error('Invalid private Questions processed snapshot counts');
+    }
+    Object.assign(data, {
+      snapshot_scope: 'processed', processed_count: snapshot.processed_count,
+      eligible_question_count: eligible, corpus_total: snapshot.corpus_total,
+      corpus_complete: snapshot.corpus_complete,
+    });
+  }
   return data;
 }
 

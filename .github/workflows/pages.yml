@@ -51,7 +51,11 @@ jobs:
           set -euo pipefail
           if jq -e '.enabled == true' config/questions-preview.json >/dev/null && test -f site/data/manifest.json; then
             if gh release download data --repo "$GITHUB_REPOSITORY" --pattern questions-preview.json --dir build/published; then
-              node scripts/questions_public_preview.mjs --source build/published/questions-preview.json --data site/data
+              if jq -e '.complete_enabled == true' config/questions-preview.json >/dev/null; then
+                node scripts/questions_public_preview.mjs --source build/published/questions-preview.json --data site/data --allow-complete
+              else
+                node scripts/questions_public_preview.mjs --source build/published/questions-preview.json --data site/data
+              fi
             else
               echo "::warning::No approved Questions preview asset; Questions stays disabled"
             fi

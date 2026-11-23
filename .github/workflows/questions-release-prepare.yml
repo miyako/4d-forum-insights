@@ -1,0 +1,104 @@
+name: Prepare private Questions translations
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_asset:
+        description: Authenticated encrypted release-input asset name
+        required: true
+      input_sha256:
+        description: Independently verified encrypted input SHA-256
+        required: true
+      entries:
+        description: Maximum missing strings to request across both locales (1-70000)
+        default: '1000'
+      minutes:
+        description: Total translation budget in minutes (1-150)
+        default: '20'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: questions-release-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - name: Validate inputs and credentials
+        env:
+          INPUT_ASSET: ${{ inputs.input_asset }}
+          INPUT_SHA256: ${{ inputs.input_sha256 }}
+          ENTRIES: ${{ inputs.entries }}
+          MINUTES: ${{ inputs.minutes }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          QUESTIONS_RELEASE_TRANSFER_KEY: ${{ secrets.QUESTIONS_RELEASE_TRANSFER_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          if not re.fullmatch(r"questions-release-input-[a-f0-9]{12}\.enc", os.environ["INPUT_ASSET"]):
+              raise SystemExit("Invalid encrypted input asset name")
+          if not re.fullmatch(r"[a-f0-9]{64}", os.environ["INPUT_SHA256"]):
+              raise SystemExit("Invalid encrypted input hash")
+          for name, maximum in (("ENTRIES", 70000), ("MINUTES", 150)):
+              value = os.environ[name]
+              if not value.isascii() or not value.isdigit() or not 1 <= int(value) <= maximum:
+                  raise SystemExit(f"Invalid {name}")
+          for name in ("OPENAI_API_KEY", "OPENAI_MODEL"):
+              if not os.environ.get(name, "").strip():
+                  raise SystemExit(f"Missing {name}; no fallback")
+          if not re.fullmatch(r"[a-f0-9]{64}", os.environ["QUESTIONS_RELEASE_TRANSFER_KEY"]):
+              raise SystemExit("Missing or invalid one-time transfer key")
+          PY
+      - name: Download and authenticate private inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_ASSET: ${{ inputs.input_asset }}
+          INPUT_SHA256: ${{ inputs.input_sha256 }}
+          QUESTIONS_RELEASE_TRANSFER_KEY: ${{ secrets.QUESTIONS_RELEASE_TRANSFER_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/questions-transfer"
+          gh release download data --pattern "$INPUT_ASSET" --dir "$RUNNER_TEMP/questions-transfer"
+          printf '%s  %s\n' "$INPUT_SHA256" "$RUNNER_TEMP/questions-transfer/$INPUT_ASSET" | sha256sum --check --status
+          node scripts/questions_release_transfer.mjs --operation open \
+            --file "$RUNNER_TEMP/questions-transfer/$INPUT_ASSET" --directory "$RUNNER_TEMP/questions-transfer/work"
+      - name: Translate missing strings and retain encrypted checkpoints
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          LOCALIZATION_REASONING_EFFORT: low
+          QUESTIONS_RELEASE_TRANSFER_KEY: ${{ secrets.QUESTIONS_RELEASE_TRANSFER_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          ENTRIES: ${{ inputs.entries }}
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          node scripts/questions_release_translate.mjs \
+            --directory "$RUNNER_TEMP/questions-transfer/work" --entries "$ENTRIES" --minutes "$MINUTES" \
+            --checkpoint-prefix "questions-release-output-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Summarize without display text
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "questions-transfer/work/translation-summary.json"
+          if path.is_file():
+              data = json.loads(path.read_text())
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+                  out.write("Private translation preparation; no site publication.\n\n")
+                  for key in ("requested", "translated", "model_calls", "complete", "failed", "translation_review_required"):
+                      out.write(f"- {key}: {data[key]}\n")
+          PY

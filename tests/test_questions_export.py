@@ -2,10 +2,12 @@
 
 import hashlib
 import json
+import os
 from contextlib import closing, contextmanager
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -133,6 +135,83 @@ class QuestionsExportTests(unittest.TestCase):
         self.assertFalse(candidate["publish_allowed"])
         self.assertFalse(audit["publication_authorized"])
         self.assertTrue(audit["privacy_review_required"])
+
+    def test_review_pipeline_stages_private_candidate_without_network_or_publication(self):
+        with connection(self.ratings) as con:
+            corpus.set_state(con, "runtime", {"model": "synthetic", "revision": "test",
+                                            "prompt": corpus.PROMPT_VERSION, "evidence": corpus.EVIDENCE_VERSION})
+        build = ROOT / "build"
+        build.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="questions-review-test-", dir=build) as temp:
+            root = Path(temp)
+            for name, original in (("source.db", self.source), ("ratings.db", self.ratings)):
+                with closing(sqlite3.connect(original)) as src, closing(sqlite3.connect(root / name)) as dst:
+                    src.backup(dst)
+                    dst.execute("PRAGMA journal_mode=DELETE")
+            data, store = root / "data", root / "store"
+            data.mkdir()
+            store.mkdir()
+            (data / "manifest.json").write_text(json.dumps({"questions": []}))
+            output = root / "review"
+            cmd = [sys.executable, "scripts/questions_prepare_review.py",
+                   "--source", str(root / "source.db"), "--ratings", str(root / "ratings.db"),
+                   "--baseline", str(self.base), "--baseline-sha256", self.base_hash,
+                   "--data", str(data), "--store", str(store), "--model", "synthetic",
+                   "--revision", "test", "--output", str(output)]
+            wrong = subprocess.run(cmd[:-3] + ["wrong", "--output", str(output)],
+                                   cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(wrong.returncode, 0)
+            self.assertFalse(output.exists())
+            result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["review_required"])
+            audit = json.loads((output / "candidate/audit.json").read_text())
+            localization = json.loads((output / "localization-report.json").read_text())
+            manifest = json.loads((output / "preview/data/manifest.json").read_text())
+            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+            self.assertTrue(audit["privacy_review_required"])
+            self.assertFalse(audit["publication_authorized"])
+            self.assertTrue(manifest["private_preview"])
+            self.assertFalse(manifest["publish_allowed"])
+            self.assertFalse(manifest["questions_view"]["enabled"])
+            self.assertFalse(manifest["questions_view"]["semantic_enabled"])
+            self.assertEqual((localization["requested"], localization["translated"]), (0, 0))
+            self.assertEqual(localization["coverage"]["fr/questions"]["missing"], 2)
+            again = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(again.returncode, 0)
+            self.assertIn("already exists", again.stderr)
+            broken = root / "broken-data"
+            broken.mkdir()
+            failed_output = root / "failed"
+            failed_cmd = list(cmd)
+            failed_cmd[failed_cmd.index("--data") + 1] = str(broken)
+            failed_cmd[-1] = str(failed_output)
+            failed = subprocess.run(failed_cmd, cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("inspect private log", failed.stderr)
+            self.assertEqual((failed_output / "staging-error.log").stat().st_mode & 0o777, 0o600)
+            encrypted = root / "checkpoint.enc"
+            env = {**os.environ, "DB_KEY": "synthetic-review-key"}
+            subprocess.run(["node", "scripts/questions_checkpoint.mjs", "pack",
+                            "--source", str(root / "source.db"), "--ratings", str(root / "ratings.db"),
+                            "--output", str(encrypted)], cwd=ROOT, env=env, check=True, capture_output=True)
+            checkpoint_hash = corpus.file_hash(encrypted)
+            checkpoint_output = root / "checkpoint-review"
+            checkpoint_cmd = [sys.executable, "scripts/questions_prepare_review.py",
+                              "--checkpoint", str(encrypted), "--checkpoint-sha256", checkpoint_hash,
+                              "--baseline", str(self.base), "--baseline-sha256", self.base_hash,
+                              "--data", str(data), "--store", str(store), "--model", "synthetic",
+                              "--revision", "test", "--output", str(checkpoint_output)]
+            reviewed = subprocess.run(checkpoint_cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+            self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+            self.assertEqual(json.loads(reviewed.stdout)["checkpoint_sha256"], checkpoint_hash)
+            checkpoint_audit = json.loads((checkpoint_output / "candidate/audit.json").read_text())
+            self.assertFalse(checkpoint_audit["publication_authorized"])
+            wrong_checkpoint = list(checkpoint_cmd)
+            wrong_checkpoint[wrong_checkpoint.index("--checkpoint-sha256") + 1] = "0" * 64
+            wrong_checkpoint[-1] = str(root / "wrong-checkpoint")
+            self.assertNotEqual(subprocess.run(wrong_checkpoint, cwd=ROOT, env=env, capture_output=True).returncode, 0)
+            self.assertFalse((root / "wrong-checkpoint").exists())
 
     def test_decision_revision_and_invalid_answers_are_not_exported_as_current(self):
         with connection(self.ratings) as con:

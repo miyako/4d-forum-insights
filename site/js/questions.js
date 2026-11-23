@@ -52,7 +52,9 @@ async function init() {
     if (questionsPreview(manifest)) {
       $('#preview').hidden = false;
       $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
-        ? tr('Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.', {
+        ? tr(manifest.questions_view.corpus_complete === true
+          ? 'Private complete snapshot: {count} records, {questions} eligible questions. Review is required; nothing here is published.'
+          : 'Private processed snapshot: {count} records, {questions} eligible questions. Corpus incomplete; classification paused. Nothing here is published.', {
           count: num.format(data.entries.length), questions: num.format(app.items.length),
         })
         : tr('Private frozen sample: {count} threads, not representative. Full processing continues; nothing here is published.', { count: num.format(data.entries.length) });
@@ -63,9 +65,11 @@ async function init() {
       $('#preview').hidden = false;
       $('#preview').classList.add('warn');
       $('#preview').textContent = manifest.questions_view.snapshot_scope === 'processed'
-        ? tr('Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', {
+        ? tr(manifest.questions_view.corpus_complete === true
+          ? 'Complete frozen snapshot, source selected {date}: {count} records, {questions} eligible questions. This is not the current forum; model assessments are unreviewed and semantic search is disabled.'
+          : 'Public processed preview: {count} of {total} corpus records, {questions} eligible questions. Corpus incomplete and not representative. Model assessments are unreviewed; semantic search is disabled.', {
           count: num.format(data.entries.length), total: num.format(manifest.questions_view.corpus_total),
-          questions: num.format(app.items.length),
+          questions: num.format(app.items.length), date: manifest.questions_view.source_selected_at,
         })
         : tr('Public preview: a frozen sample of {count} threads, not the full dataset or a representative sample. Model assessments are unreviewed. Full processing continues; semantic search is not enabled.', { count: num.format(data.entries.length) });
     }

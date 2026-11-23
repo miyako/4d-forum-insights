@@ -20,6 +20,8 @@ export const DOMAINS = {
   coding: 'Coding', interface: 'User interface', administration: 'Administration', setup: 'Installation & setup',
   migration: 'Migration', network: 'Web & network', database: 'Database management', integration: 'Integration', other: 'Other',
 };
+export const questionDomains = (answers) =>
+  Object.keys(DOMAINS).filter((key) => answers['domain_' + key].noul >= .6);
 export const STATE_KEYS = ['q', 'mode', 'coverage', 'impact', 'complexity', 'domain', 'solved', 'closed', 'replies', 'clarification', 'sort', 't'];
 const selected = (params, key, choices) => [...new Set((params.get(key) || '').split(',').filter((v) => Object.hasOwn(choices, v)))];
 const oneOf = (value, choices, fallback) => choices.includes(value) ? value : fallback;
@@ -115,7 +117,7 @@ export function buildQuestions(data) {
       warnings: Array.isArray(row.evidence_warnings) ? row.evidence_warnings.filter((v) => typeof v === 'string') : [],
       decisionModel: row.decision_model || '', decisionVersion: row.decision_version || '',
       hasQuestion: a.has_question.noul >= .5,
-      domains: Object.keys(DOMAINS).filter((k) => a['domain_' + k].noul >= .6),
+      domains: questionDomains(a),
     };
   }).filter((it) => it.hasQuestion);
 }

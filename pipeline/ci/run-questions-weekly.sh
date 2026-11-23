@@ -115,6 +115,8 @@ rm -f build/questions-models/decision.gguf
 (cd pipeline && timeout 35m uv run -q python ../scripts/questions_weekly.py propose \
     --config "../$CFG" --root "../$ROOT" --source "../$SOURCE" --limit 100 --minutes 30)
 
+timeout 35m uv run --project pipeline python scripts/questions_weekly_review.py english \
+    --root "$ROOT" --source "$SOURCE" --limit 100 --minutes 30
 uv run --project pipeline python scripts/questions_weekly.py export --root "$ROOT" --source "$SOURCE" --out "$ROOT/embedding"
 node scripts/questions_weekly_translate.mjs --data "$ROOT/embedding" --store "$ROOT/locales" \
     --entries 200 --minutes 15 --batch-size 10 --workers 1 --timeout 120 --retries 2
@@ -123,4 +125,6 @@ if [ -s "$ROOT/embedding/embed-input.jsonl" ]; then
     EMBED_THREADS=4 timeout 15m node scripts/build_embeddings.mjs \
         --input "$ROOT/embedding/embed-input.jsonl" --out "$ROOT/embedding"
 fi
+timeout 65m uv run --project pipeline python scripts/questions_weekly_review.py translations \
+        --root "$ROOT" --source "$SOURCE" --limit 100 --minutes 30
 uv run --project pipeline python scripts/questions_weekly.py candidate --root "$ROOT" --source "$SOURCE"

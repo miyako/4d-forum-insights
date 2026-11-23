@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -17,8 +18,10 @@ sys.path.insert(0, str(ROOT / "pipeline/src"))
 import questions_weekly as weekly
 import questions_weekly_publish as publishing
 import questions_weekly_store as store
+import questions_weekly_review as independent
 from fminer import db, enrich, questions_corpus as corpus
 from test_questions import answers, raw
+import test_publish_data as publication_fixtures
 
 
 class WeeklyTests(unittest.TestCase):
@@ -66,6 +69,7 @@ class WeeklyTests(unittest.TestCase):
         readiness = {"schema": "questions-weekly-readiness-v1", "identity": weekly.identity(self.cfg),
                      "initial_en_fr_ja_published": True, "weekly_private_processing_authorized": True,
                      "openai_redaction_authorized": True,
+                     "automated_review_authorized": True, "weekly_publication_authorized": True,
                      "evaluation_sha256": corpus.file_hash(self.root / "evaluation.json"),
                      "reviewer": "synthetic-test-only", "reviewed_at": "2026-01-03T00:00:00Z"}
         weekly.capture_delta(self.source, self.root)
@@ -95,6 +99,155 @@ class WeeklyTests(unittest.TestCase):
                     "openai_authorized": True, "reviewer": "synthetic-test-only",
                     "reviewed_at": "2026-01-03T00:00:00Z"}
         (self.root / "reviews.json").write_text(json.dumps({"schema": "questions-weekly-reviews-v1", "entries": entries}))
+
+    @staticmethod
+    def independent_check(original, output, posts, model, **kwargs):
+        decision = {"privacy_clear": True, "meaning_preserved": True, "uncertain": False}
+        return decision, {"version": independent.reviewer.VERSION, "model": model,
+                          "original_hash": weekly.privacy.digest(original),
+                          "display_hash": weekly.privacy.digest(output), "decision": decision,
+                          "response_hash": weekly.privacy.digest(decision), "model_calls": 1,
+                          "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    def independent_review(self, locale="en", checker=None):
+        with redirect_stdout(io.StringIO()):
+            independent.review_fields(self.source, self.root, self.cfg, locale,
+                                      review=checker or self.independent_check)
+
+    def seed_translation_overlays(self):
+        source = {row["id"]: row for row in self.exported()}
+        for locale in ("fr", "ja"):
+            directory = self.root / "locales" / locale
+            directory.mkdir(parents=True, exist_ok=True)
+            document = {"version": 1, "locale": locale, "page": "questions", "entries": {
+                str(id): {"source_hash": weekly.privacy.digest({"title": row["title"], "body": row["body"]}),
+                          "translation_version": "1", "fields": {"title": row["title"], "body": row["body"]}}
+                for id, row in source.items()}}
+            (directory / "questions.json").write_text(json.dumps(document))
+
+    def test_independent_checks_create_exact_approvals_and_unchanged_rerun_has_no_requests(self):
+        self.propose()
+        self.assertEqual(self.exported(), [])
+        self.independent_review()
+        self.assertEqual(len(self.exported()), 2)
+        self.independent_review(checker=lambda *args, **kwargs: self.fail("unchanged review requested"))
+        self.seed_translation_overlays()
+        for locale in ("fr", "ja"):
+            self.independent_review(locale)
+        file = self.root / "locales/fr/questions.json"
+        overlay = json.loads(file.read_text())
+        overlay["entries"]["2"]["fields"]["title"] = "Nouvelle question ORDA?"
+        file.write_text(json.dumps(overlay))
+        calls = []
+        def check(*args, **kwargs):
+            calls.append((args[1], kwargs["locale"]))
+            return self.independent_check(*args, **kwargs)
+        self.independent_review("fr", check)
+        self.independent_review("ja", lambda *args, **kwargs: self.fail("unchanged Japanese requested"))
+        self.assertEqual(calls, [("Nouvelle question ORDA?", "fr")])
+
+    def test_rejection_or_interrupted_check_never_becomes_clearance(self):
+        self.propose()
+        def rejecting(*args, **kwargs):
+            decision, audit = self.independent_check(*args, **kwargs)
+            decision["meaning_preserved"] = False
+            audit["response_hash"] = weekly.privacy.digest(decision)
+            return decision, audit
+        with self.assertRaises(RuntimeError):
+            self.independent_review(checker=rejecting)
+        self.assertEqual(self.exported(), [])
+        with self.assertRaises(RuntimeError):
+            self.independent_review(checker=lambda *args, **kwargs: self.fail("rejected field retried"))
+        with closing(weekly.display_connect(self.root / "display.db")) as con:
+            con.execute("DELETE FROM review_fields")
+            con.commit()
+        calls = []
+        def failing(original, *args, **kwargs):
+            calls.append(original)
+            if original.startswith("How"):
+                raise weekly.privacy.DetectionFailure(2, "timeout")
+            return self.independent_check(original, *args, **kwargs)
+        with self.assertRaises(RuntimeError):
+            self.independent_review(checker=failing)
+        self.assertIn("Use ORDA in 4D v20.", calls)
+        with closing(weekly.display_connect(self.root / "display.db")) as con:
+            title = con.execute("SELECT attempts,outcome FROM review_fields WHERE topic_id=1 AND field='title'").fetchone()
+            self.assertEqual(tuple(title), (2, "held"))
+        self.assertEqual(self.exported(), [])
+
+    def test_automatic_publication_review_requires_all_three_languages_and_exact_proofs(self):
+        self.propose()
+        self.independent_review()
+        self.seed_translation_overlays()
+        self.independent_review("fr")
+        with redirect_stdout(io.StringIO()):
+            weekly.candidate(self.source, self.root, self.cfg)
+        with self.assertRaisesRegex(ValueError, "translation reviews"):
+            independent.authorize_publication(self.source, self.root, self.cfg, "c" * 64)
+        self.independent_review("ja")
+        with redirect_stdout(io.StringIO()):
+            independent.authorize_publication(self.source, self.root, self.cfg, "c" * 64)
+        publishing.publication_review(self.root, self.cfg, None)
+        with (self.root / "portable-locales/fr/questions.json").open("a") as stream:
+            stream.write("\n")
+        with self.assertRaisesRegex(ValueError, "exact-byte"):
+            publishing.publication_review(self.root, self.cfg, None)
+        reviews_path = self.root / "reviews.json"
+        reviews = json.loads(reviews_path.read_text())
+        reviews["entries"]["1"]["proof_sha256"]["title"] = "0" * 64
+        reviews_path.write_text(json.dumps(reviews))
+        with self.assertRaisesRegex(ValueError, "proofs differ"):
+            independent.authorize_publication(self.source, self.root, self.cfg, "c" * 64)
+
+    def test_offline_automatic_publication_checks_real_preflight_and_saves_reviewed_checkpoint(self):
+        self.propose()
+        self.independent_review()
+        self.seed_translation_overlays()
+        for locale in ("fr", "ja"):
+            self.independent_review(locale)
+        with redirect_stdout(io.StringIO()):
+            weekly.candidate(self.source, self.root, self.cfg)
+        gh = publication_fixtures.FakeGitHub()
+        gh.assets["questions-preview.json"] = (self.root / "publication/public-preview.json").read_bytes()
+        fixture = publication_fixtures.PublicationTests()
+        fixture.root = Path(self.temp.name) / "published-english"
+        fixture.root.mkdir()
+        archive = fixture.root / "site-data.tar.gz"
+        weekly.publisher.pack_site(fixture.source(), archive)
+        original_english = archive.read_bytes()
+        gh.assets["site-data.tar.gz"] = original_english
+        calls = []
+        original_run = subprocess.run
+        original_read = Path.read_text
+        def run(command, *args, **kwargs):
+            if command[:2] == ["scripts/db-store.sh", "pull"]:
+                weekly.backup(self.source, Path(command[2]))
+                return subprocess.CompletedProcess(command, 0)
+            if command[:3] == ["python3", "scripts/questions_weekly_store.py", "push"]:
+                directory = Path(self.temp.name) / "saved-checkpoint"
+                directory.mkdir()
+                packed = store.pack(self.root, directory)
+                with tarfile.open(packed) as tar:
+                    self.assertIn("translation-reviews.json", tar.getnames())
+                    self.assertIn("publication-review.json", tar.getnames())
+                self.assertFalse(any(kind == "release" and args[0] == "upload" for kind, args in gh.calls))
+                calls.append("checkpoint")
+                return subprocess.CompletedProcess(command, 0)
+            return original_run(command, *args, **kwargs)
+        def read(path, *args, **kwargs):
+            if path.resolve() == ROOT / "config/questions-preview.json":
+                return '{"enabled":true,"complete_enabled":true}'
+            return original_read(path, *args, **kwargs)
+        with patch.dict("os.environ", {"PUBLICATION_ENABLED": "true"}), \
+                patch.object(publishing.publisher, "GitHub", return_value=gh), \
+                patch.object(publishing.subprocess, "run", side_effect=run), \
+                patch.object(Path, "read_text", read), redirect_stdout(io.StringIO()):
+            publishing.publish(self.root, self.cfg)
+        self.assertEqual(calls, ["checkpoint"])
+        self.assertEqual(gh.assets["site-data.tar.gz"], original_english)
+        self.assertTrue(json.loads(gh.assets["questions-preview.json"])["corpus_complete"])
+        self.assertIn("localization.tar.gz", gh.assets)
+        self.assertIsNone(gh.owner)
 
     def exported(self):
         with redirect_stdout(io.StringIO()):

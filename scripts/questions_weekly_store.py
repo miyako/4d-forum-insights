@@ -13,7 +13,7 @@ import tarfile
 import tempfile
 
 ASSET = "questions-weekly.tar.zst.enc"
-FILES = {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json",
+FILES = {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json", "translation-reviews.json",
          "publication-review.json", "ui-publication-review.json", "status.json", "delta-source.json"}
 PREFIXES = ("locales/", "portable-locales/", "embedding/", "publication/")
 
