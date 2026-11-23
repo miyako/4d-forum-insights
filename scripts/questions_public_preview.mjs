@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildQuestions, questionDomains, questionsEnabled, questionsPublicPreview, COVERAGE, IMPACT, COMPLEXITY, DOMAINS } from '../site/js/questions-core.js';
+import { Semantic } from '../site/js/semantic.js';
 
 const ROW_FIELDS = ['id', 'title', 'body', 'active', 'lang', 'accepted', 'closed', 'replies', 'answers', 'evidence_warnings', 'decision_model', 'decision_version'];
 const CHOICES = { coverage: COVERAGE, impact: IMPACT, technicality: COMPLEXITY };
@@ -73,6 +74,27 @@ export function validatePublicPreview(data) {
   return result;
 }
 
+function validateSemanticIndex(data, manifest, directory) {
+  const meta = manifest.embeddings;
+  if (!new Semantic(meta).available) throw new Error('Complete Questions requires a compatible semantic index');
+  const asset = (name) => {
+    const path = typeof name === 'string' ? name.split('?')[0] : '';
+    if (!/^[\w./-]+$/.test(path) || path.startsWith('/') || path.split('/').some(part => !part || part === '.' || part === '..')) {
+      throw new Error('Invalid semantic index asset path');
+    }
+    return resolve(directory, path);
+  };
+  const ids = JSON.parse(readFileSync(asset(meta.ids), 'utf8'));
+  if (!Array.isArray(ids) || !Number.isSafeInteger(meta.count) || ids.length !== meta.count
+    || ids.some(id => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length
+    || statSync(asset(meta.bin)).size !== ids.length * meta.dim) {
+    throw new Error('Invalid semantic index IDs or vector size');
+  }
+  const indexed = new Set(ids);
+  const missing = buildQuestions(data).filter(question => !indexed.has(question.id)).length;
+  if (missing) throw new Error(`Semantic index is missing ${missing} eligible Questions topics`);
+}
+
 export function installPublicPreview(source, directory, { allowComplete = false } = {}) {
   const data = validatePublicPreview(JSON.parse(readFileSync(source, 'utf8')));
   if (data.corpus_complete === true && !allowComplete) throw new Error('Complete Questions snapshot is not enabled');
@@ -81,10 +103,11 @@ export function installPublicPreview(source, directory, { allowComplete = false 
   if (manifest.private_preview === true || manifest.publish_allowed === false) throw new Error('Cannot publish a private site manifest');
   if (!Array.isArray(manifest.questions)) throw new Error('Requests classification array must be preserved');
   if (questionsEnabled(manifest)) throw new Error('Refusing to replace an enabled production Questions dataset with a sample');
+  if (data.corpus_complete === true) validateSemanticIndex(data, manifest, directory);
   mkdirSync(resolve(directory, 'questions'), { recursive: true });
   writeFileSync(resolve(directory, 'questions/preview.json'), JSON.stringify(data));
   manifest.questions_view = {
-    enabled: false, preview: true, public_preview: true, semantic_enabled: false,
+    enabled: false, preview: true, public_preview: true, semantic_enabled: data.corpus_complete === true,
     ...(data.snapshot_scope === 'processed' ? { snapshot_scope: 'processed', processed_count: data.processed_count,
       corpus_total: data.corpus_total, corpus_complete: data.corpus_complete,
       ...(data.corpus_complete ? { source_selected_at: data.source_selected_at } : {}) } : {}),
@@ -109,6 +132,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       throw new Error('Usage: node scripts/questions_public_preview.mjs --source FILE --data DIRECTORY [--allow-complete]');
     }
     installPublicPreview(args[1], args[3], { allowComplete: args.length === 5 });
-    console.log('Publication-approved Questions preview installed; production rollout and semantic search remain disabled');
+    console.log('Publication-approved Questions preview installed');
   }
 }

@@ -9,6 +9,7 @@ import { sourceHash } from '../scripts/localization.mjs';
 import { validatePublicPreview, installPublicPreview, gateQuestionsRoute } from '../scripts/questions_public_preview.mjs';
 import { createLocale, preferredLocale, installLocale, localeURL, navigationURL, stateURL, modelDisclosure, loadOverlay } from '../site/js/locale.js';
 import { KeywordIndex } from '../site/js/search.js';
+import { embeddingIdentity, TRANSFORMERS_VERSION } from '../site/js/embed-worker.js';
 
 const rating = (labels, choice) => ({ choice, probabilities: Object.fromEntries(Object.keys(labels).map((k) => [k, k === choice ? 1 : 0])) });
 const row = (id = 1, overrides = {}) => ({
@@ -208,10 +209,24 @@ test('complete public snapshot is distinct, opt-in and strips private provenance
     writeFileSync(resolve(temp, 'source.json'), JSON.stringify(source));
     writeFileSync(resolve(temp, 'manifest.json'), JSON.stringify({ questions: [{ id: 'fr' }] }));
     assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp), /not enabled/);
+    assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true }), /compatible semantic index/);
+    const embeddings = { dim: 256, quant: 'int8', pooling: 'sentence_embedding',
+      transformers_version: TRANSFORMERS_VERSION, count: 2, ids: 'ids.json?v=1', bin: 'vectors.bin?v=1' };
+    embeddings.cache_identity = embeddingIdentity(embeddings);
+    writeFileSync(resolve(temp, 'manifest.json'), JSON.stringify({ questions: [{ id: 'fr' }], embeddings }));
+    writeFileSync(resolve(temp, 'ids.json'), JSON.stringify([2, 3]));
+    writeFileSync(resolve(temp, 'vectors.bin'), Buffer.alloc(512));
+    assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true }), /missing 1 eligible/);
+    writeFileSync(resolve(temp, 'ids.json'), JSON.stringify([1, 1]));
+    assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true }), /Invalid semantic index/);
+    writeFileSync(resolve(temp, 'ids.json'), JSON.stringify([1, 3]));
+    writeFileSync(resolve(temp, 'vectors.bin'), Buffer.alloc(256));
+    assert.throws(() => installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true }), /vector size/);
+    writeFileSync(resolve(temp, 'vectors.bin'), Buffer.alloc(512));
     installPublicPreview(resolve(temp, 'source.json'), temp, { allowComplete: true });
     const manifest = JSON.parse(readFileSync(resolve(temp, 'manifest.json')));
     assert.equal(manifest.questions_view.corpus_complete, true);
-    assert.equal(manifest.questions_view.semantic_enabled, false);
+    assert.equal(manifest.questions_view.semantic_enabled, true);
     assert.equal(manifest.questions_view.enabled, false);
     assert.equal(manifest.questions_view.source_selected_at, source.source_selected_at);
     assert.deepEqual(manifest.questions, [{ id: 'fr' }]);
@@ -318,7 +333,7 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   const context = {
     ...core, KeywordIndex, createLocale, preferredLocale, localeURL, stateURL, modelDisclosure, loadOverlay,
     installLocale: (i18n, page) => installLocale(i18n, page, document, location),
-    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: publication.endsWith('complete') ? 3 : 5, corpus_complete: publication.endsWith('complete'), ...(publication === 'public-complete' ? { source_selected_at: '2026-11-12T04:16:20Z' } : {}), preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
+    loadManifest: async () => ({ private_preview: !isPublic, publish_allowed: isPublic, embeddings: { count: 100 }, questions_view: { snapshot_scope: isProcessed ? 'processed' : 'sample', corpus_total: publication.endsWith('complete') ? 3 : 5, corpus_complete: publication.endsWith('complete'), ...(publication === 'public-complete' ? { source_selected_at: '2026-11-12T04:16:20Z', semantic_enabled: true } : {}), preview: true, public_preview: isPublic, enabled: false, files: { entries: 'questions/entries.json' } } }),
     getJSON: async (file) => file.startsWith('locales/') ? {
       version: 1, page: 'questions', locale, entries: translation === 'missing' ? {} : {
         1: { source_hash: translation === 'stale' ? '0'.repeat(64) : sourceHash({ title: row().title, body: row().body }),
@@ -330,7 +345,10 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
     } : ({ ...data(row(1, { accepted: true, closed: true, replies: 0 }),
       ...(isProcessed ? [row(2, { replies: 0 }), row(3, { answers: { ...row().answers, has_question: { noul: .49 } } })] : [])),
       generated_at: '2026-11-22T09:04:28Z', public_preview: isPublic, private_preview: !isPublic, publish_allowed: isPublic }),
-    Semantic: class { available = false; },
+    Semantic: class {
+      constructor(meta) { this.meta = meta; this.available = Boolean(meta); }
+      async search(_query, limit) { assert.equal(limit, 100); return [{ id: 2, score: .9 }, { id: 999, score: .8 }, { id: 1, score: .7 }]; }
+    },
     document, location, console, URLSearchParams, setTimeout,
     window: { history: { pushState: navigate, replaceState: navigate }, addEventListener: (name, callback) => events.set(name, callback) },
   };
@@ -374,8 +392,17 @@ for (const locale of ['en', 'fr', 'ja']) for (const publication of ['private', '
   assert.match(get('#results').innerHTML, /--coverage-fill:50%/);
   assert.match(get('#results').innerHTML, /rating-tone tone-medium/);
   assert.ok(get('#results').innerHTML.includes(createLocale(locale).t('Unanswered (zero replies)')));
-  assert.equal(modes[1].disabled, true);
+  assert.equal(modes[1].disabled, publication !== 'public-complete');
   assert.equal(new URLSearchParams(location.search).get('tracking'), 'keep');
+  if (publication === 'public-complete') {
+    context.api.app.state.q = 'ORDA'; context.api.app.state.mode = 'sem';
+    await context.api.searchSemantic();
+    assert.deepEqual(Array.from(context.api.app.semanticResult.list, result => result.id), [2, 999, 1]);
+    assert.match(get('#results').innerHTML, /id="question-2"/);
+    assert.doesNotMatch(get('#results').innerHTML, /id="question-999"/);
+    context.api.app.state.q = ''; context.api.app.state.mode = 'kw';
+    context.api.app.semantic.available = false;
+  }
   context.api.app.state.replies = 'some'; context.api.update();
   assert.ok(get('#results').innerHTML.includes(createLocale(locale).t('No questions match. Try removing a filter.')));
   context.api.app.state.t = 1; context.api.update();

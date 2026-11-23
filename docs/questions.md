@@ -555,12 +555,12 @@ outright and removes the Questions route unless production or a separately appro
 and publication remain the processing session's separate rollout work; finishing classification alone
 does not automatically deploy anything.
 
-Semantic/hybrid infrastructure is prepared but **dormant**: the private adapter explicitly sets
-`questions_view.semantic_enabled:false`. Separate authorization is required before setting it to true.
-Without that opt-in, even compatible public embeddings are not passed to the semantic loader, and semantic
-controls remain disabled. No embedding rebuild or new-field localization is performed.
+The private adapter and incomplete public previews set `questions_view.semantic_enabled:false`.
+The complete public snapshot enables semantic and hybrid search using the existing public embeddings,
+after checking index compatibility, vector size, and coverage of every eligible question ID. An invalid
+or incomplete index fails the Pages build rather than silently dropping questions.
 
-Once authorized, compatible public embeddings can be reused lazily by stable topic ID; Questions
+Compatible public embeddings are reused lazily by stable topic ID; Questions
 membership is applied **after** global ranking to avoid dropping a small sample before matching its IDs.
 Absent/incompatible embeddings disable semantic controls with a visible explanation. Loading or inference
 failure shows explicit keyword fallback status. This is infrastructure reuse, not new Questions-specific
@@ -990,8 +990,8 @@ live forum is complete. It uses `version:1`, `public_preview:true`, `private_pre
 `processed_count == corpus_total == entries.length`, and an exact `eligible_question_count` at the
 existing question threshold. `source_selected_at` is the independently verified ISO timestamp when the
 frozen source was selected for the corpus, not the snapshot capture time or a per-topic freshness claim.
-All source members, including nonquestions, remain present. The page labels the frozen date in English,
-French and Japanese, retains unreviewed decision disclaimers, and keeps semantic search disabled.
+All source members, including nonquestions, remain present. The footer shows the frozen source date in
+English, French and Japanese. Semantic and hybrid search reuse the public topic index.
 
 The public validator preserves the 15 decision axes and distributions, nullable solved/closed/reply
 metadata, and the known evidence-warning allowlist; it strips private runtime/prompt fields and other
