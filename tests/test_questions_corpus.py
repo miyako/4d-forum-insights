@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "pipeline/src"))
 from fminer import db, questions, questions_corpus as corpus
 from test_questions import answers, raw
+with patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+    import questions_prepare_public_update as public_update
 
 
 def response(build):
@@ -49,6 +51,26 @@ class CorpusTests(unittest.TestCase):
     def classify(self, **kwargs):
         return corpus.classify(self.con, "http://unused", "", "weights-sha256/runtime-v1",
                                log=lambda _: None, **kwargs)
+
+    def test_public_update_uses_kev_on_original_thread_and_keeps_probabilities(self):
+        expected = answers()
+        expected["has_question"]["noul"] = .83
+        with patch.object(corpus, "CorpusDecider") as factory:
+            decider = factory.return_value
+            model = json.loads((ROOT / "config/questions-weekly.json").read_text())["decision_model"]
+            decider.http.__enter__.return_value.get.return_value.json.return_value = {"data": [{"id": model}]}
+
+            def answer(build):
+                evidence = build(6000)
+                self.assertIn("Can this setting be changed?", evidence)
+                self.assertIn("No, not in v19.", evidence)
+                return {"answers": expected}
+
+            decider.ask_fitting.side_effect = answer
+            row, actual = public_update.kev_answers(self.source, 1)
+            self.assertEqual(row["posts_count"], 2)
+            self.assertEqual(actual, expected)
+            factory.assert_called_once_with("http://127.0.0.1:18080", model)
 
     def test_source_is_read_only_results_are_isolated_and_all_languages_are_members(self):
         report = self.prepare()

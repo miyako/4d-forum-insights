@@ -120,7 +120,7 @@ jobs:
   public-prepare:
     if: github.event_name == 'workflow_dispatch' && inputs.public_summary != '' && !inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.cleared_update_sha256 == ''
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
@@ -131,7 +131,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.2
-      - run: uv run --project pipeline python scripts/questions_prepare_public_update.py
+      - name: Read forum checkpoint and classify locally with Kev
+        env:
+          DB_KEY: ${{ secrets.DB_KEY }}
+        run: |
+          umask 077
+          sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 zstd jq
+          export QUESTIONS_SOURCE_DB="$RUNNER_TEMP/questions-source.db"
+          bash scripts/db-store.sh pull "$QUESTIONS_SOURCE_DB"
+          unset DB_KEY
+          CFG=config/questions-weekly.json
+          PID=""
+          source pipeline/ci/questions-llama.sh
+          trap 'stop_server; rm -f "$QUESTIONS_SOURCE_DB" "$QUESTIONS_SOURCE_DB.tmp"' EXIT
+          install_questions_llama
+          start_server decision 18080
+          uv run --project pipeline python scripts/questions_prepare_public_update.py
       - uses: actions/upload-artifact@v7
         with:
           name: questions-public-update

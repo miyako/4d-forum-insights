@@ -12,10 +12,12 @@ use the existing inspected-owner recovery procedure in [delta setup](delta-setup
 was seeded from the published EN/FR/JA release and restore-verified on GitHub
 Actions. The private pipeline below is retained for manual use.
 
-To prepare a single new open topic with no replies, dispatch with
+To prepare a single new topic, dispatch with
 `public_summary`: a JSON object with `id`, `title`, and `body` containing a
-public-safe English paraphrase, not raw forum posts. Only the paraphrase goes
-to OpenAI for one decision and FR/JA translation request. Download and inspect
+public-safe English paraphrase, not raw forum posts. The runner reads the
+original opening and replies from the encrypted forum checkpoint and runs
+the pinned Kev Questions classifier locally. Only the paraphrase goes to
+OpenAI, for FR/JA translation, not classification. Download and inspect
 the `questions-public-update` artifact before putting it on the `data` release.
 Dispatch its `cleared_update_sha256` to stage it; also set
 `publish_cleared_update` to deploy that exact update manually. Repeating a
