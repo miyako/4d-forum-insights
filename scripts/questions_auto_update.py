@@ -18,7 +18,7 @@ import questions_public_weekly as weekly
 from fminer import questions, questions_corpus
 from fminer.questions_export import PATTERNS
 from fminer.questions_openai_privacy import check_text
-from fminer.questions_privacy import ProposalError
+from fminer.questions_privacy import DetectionFailure, ProposalError
 
 LIMIT = 3
 
@@ -50,6 +50,7 @@ def display_for(topic, paragraph, previous, overlays):
         check_text(text)
         for kind in ("code", "html", "link", "email", "mention", "path", "ip"):
             text = re.sub(PATTERNS[kind], "[redacted]", text, flags=re.IGNORECASE)
+        text = re.sub(r"`[^`]*`", "[code]", text)
         display[field] = text
     key = str(topic["id"])
     digest = publisher.questions_hashes({"version": 1, "entries": [{"id": topic["id"], **display}]})[key]
@@ -82,12 +83,13 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
     locales = {locale: {"version": 1, "locale": locale, "page": "questions", "entries": {}}
                for locale in weekly.LOCALES}
     pending = {"index or source": 0, "missing or invalid English display": 0, "credential pattern": 0,
-               "Kev timeout": 0, "batch limit": 0}
+               "Kev timeout": 0, "OpenAI failure": 0, "sensitive display": 0, "batch limit": 0}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
-        rows = con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
-                                     has_accepted_answer,closed,fetch_error
-                              FROM topics ORDER BY id DESC""")
+        rows = list(con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
+                                          has_accepted_answer,closed,fetch_error
+                                   FROM topics ORDER BY id DESC"""))
+        candidates = []
         for row in rows:
             topic_id = row["id"]
             old = previous.get(topic_id)
@@ -113,6 +115,11 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
             if display is None:
                 pending["missing or invalid English display"] += 1
                 continue
+            candidates.append((topic_id, topic, display, cached))
+        if candidates:
+            offset = (timestamp(export_date).date().toordinal() // 7 * limit) % len(candidates)
+            candidates = candidates[offset:] + candidates[:offset]
+        for topic_id, topic, display, cached in candidates:
             if attempted == limit:
                 pending["batch limit"] += 1
                 continue
@@ -129,18 +136,31 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
                 pending["Kev timeout"] += 1
                 print(f"::warning::Kev timed out for topic {topic_id}; it remains pending")
                 continue
-            entry = prepare.public_row(topic, evidence, answers, display)
-            entry["source_checked_at"] = export_date
-            if cached is None:
-                translated = prepare.translate(entry, os.environ["OPENAI_MODEL"])
-                cached = {locale: doc["entries"][str(topic_id)] for locale, doc in translated.items()}
+            try:
+                if cached is None:
+                    display = prepare.enrich_display(display, evidence, os.environ["OPENAI_MODEL"])
+                entry = prepare.public_row(topic, evidence, answers, display)
+                entry["source_checked_at"] = export_date
+                if cached is None:
+                    translated = prepare.translate(entry, os.environ["OPENAI_MODEL"])
+                    cached = {locale: doc["entries"][str(topic_id)] for locale, doc in translated.items()}
+            except ProposalError as error:
+                if error.reason != "sensitive_display":
+                    raise
+                pending["sensitive display"] += 1
+                print(f"::warning::Topic {topic_id} contains sensitive display data; it remains pending")
+                continue
+            except DetectionFailure as error:
+                pending["OpenAI failure"] += 1
+                print(f"::warning::OpenAI processing failed for topic {topic_id} ({error.reason}); it remains pending")
+                continue
             for locale in locales:
                 locales[locale]["entries"][str(topic_id)] = cached[locale]
             entries.append(entry)
     print(f"Questions: {len(entries)} prepared; pending by reason: {json.dumps(pending, sort_keys=True)}")
     if not entries:
-        if pending["Kev timeout"]:
-            raise RuntimeError("Kev timed out; no Questions updates were prepared")
+        if pending["Kev timeout"] or pending["OpenAI failure"]:
+            raise RuntimeError("Kev or OpenAI failed; no Questions updates were prepared")
         return None
     return {"schema": "questions-cleared-update-v1",
             "base_sha256": weekly.digest((work / "questions-preview.json").read_bytes()),
