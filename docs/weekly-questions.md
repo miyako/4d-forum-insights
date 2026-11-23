@@ -1,8 +1,9 @@
 # Weekly incremental Questions pipeline
 
-`.github/workflows/questions-weekly.yml` adds the Questions path on **Monday
-03:17 UTC**, matching the existing delta schedule. It does not replace
-`delta.yml`, Requests, Tips or Voices. Both CI jobs use concurrency group `delta`;
+The Questions job runs after the existing **Monday 03:17 UTC** delta ingest
+publishes the shared search index in `.github/workflows/delta.yml`.
+`.github/workflows/questions-weekly.yml` provides manual recovery and tools.
+Both workflows use concurrency group `delta`;
 the Questions processor holds the existing `data-publication-lock` lease across
 source/checkpoint pull, delta processing and encrypted saves. Local release
 writers must use the same lease. An interrupted lease is never stolen by age:
@@ -25,7 +26,20 @@ manual publish can retry Pages without rewriting an already-applied update.
 Only `main` may deploy to the `github-pages` environment. If a feature-branch
 run publishes release assets but Pages rejects the branch, dispatch `pages.yml`
 from `main`; do not change the environment protection.
-The preparation step does not discover or prepare new topics on a schedule.
+The scheduled job discovers new topics and changes to replies, raw thread text,
+and forum status from the current encrypted forum checkpoint. It considers up
+to three ready topics per run and runs Kev on their opening and replies. It uses
+English title and paragraph from the current public forum export. If both match
+an existing Questions entry exactly, it reuses the source-bound translations.
+For other text, `QUESTIONS_AUTO_DISPLAY_HASHES` supplies whitespace-separated
+SHA-256 digests of vetted English title/body pairs (using `questions_hashes`
+from `scripts/publish_data.py`). Only those exact pairs go to OpenAI; other
+topics remain pending while ready topics can proceed. No manual update packet
+or manually written summary is required by the scheduled job. Use
+`questions_preview: true` on `delta.yml` to stage against the current releases
+without writing public assets. Enable scheduled processing with
+`QUESTIONS_WEEKLY_ENABLED` and scheduled publication on the default branch
+with `QUESTIONS_WEEKLY_PUBLICATION_ENABLED`.
 
 ## Dataflow and freshness
 
@@ -198,8 +212,7 @@ The public weekly path restores this fixed baseline and reads the current
 release as the working state. A manual dispatch with no inputs verifies the
 restore without updating the site. To stage an update, use `cleared_update_sha256`
 to select the already-cleared release asset `questions-cleared-update-<sha>.json`.
-Scheduled runs instead use `QUESTIONS_WEEKLY_CLEARED_UPDATE_SHA256`. The asset
-must contain only publication-ready data (not source posts or review evidence):
+The asset must contain only publication-ready data (not source posts or review evidence):
 `schema: "questions-cleared-update-v1"`, `base_sha256` (the current
 `questions-preview.json` release asset hash), `source_selected_at` (an advancing
 ISO timestamp), `entries` (canonical public rows to insert or replace), and

@@ -1,8 +1,6 @@
 name: Weekly Questions
 
 on:
-  schedule:
-    - cron: '17 3 * * 1' # Mondays 03:17 UTC, same cadence as delta.yml
   workflow_dispatch:
     inputs:
       baseline_sha256:
@@ -155,7 +153,7 @@ jobs:
           retention-days: 3
 
   public-update:
-    if: (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && !inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.public_summary == '')
+    if: github.event_name == 'workflow_dispatch' && !inputs.legacy_private && inputs.baseline_sha256 == '' && inputs.public_summary == ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -163,9 +161,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       DB_KEY: ${{ secrets.DB_KEY }}
-      CLEARED_UPDATE_SHA256: ${{ github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_CLEARED_UPDATE_SHA256 || inputs.cleared_update_sha256 }}
-      PUBLICATION_ENABLED: ${{ (github.event_name == 'schedule' && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true') || (github.event_name == 'workflow_dispatch' && inputs.publish_cleared_update && inputs.cleared_update_sha256 != '') }}
-      RETRY_PAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_cleared_update }}
+      CLEARED_UPDATE_SHA256: ${{ inputs.cleared_update_sha256 }}
+      PUBLICATION_ENABLED: ${{ inputs.publish_cleared_update && inputs.cleared_update_sha256 != '' }}
+      RETRY_PAGES: ${{ inputs.publish_cleared_update }}
     steps:
       - uses: actions/checkout@v7
       - name: Restore checkpoint and apply a cleared update

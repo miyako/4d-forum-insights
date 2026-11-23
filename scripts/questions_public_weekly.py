@@ -51,7 +51,7 @@ def read_baseline(gh, work):
     return {row["id"] for row in snapshot["entries"]}
 
 
-def staged_update(current, overlays, update, base_hash, baseline_ids, work):
+def staged_update(current, overlays, update, base_hash, baseline_ids, work, same_export=False):
     if (not isinstance(update, dict) or set(update) != {"schema", "base_sha256", "source_selected_at", "entries", "locales"}
             or update["schema"] != "questions-cleared-update-v1" or update["base_sha256"] != base_hash
             or not isinstance(update["entries"], list) or not update["entries"]):
@@ -63,8 +63,9 @@ def staged_update(current, overlays, update, base_hash, baseline_ids, work):
     if not isinstance(source_at, str) or not re.fullmatch(
             r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", source_at):
         raise ValueError("Cleared update source date must be a timezone-aware ISO timestamp")
-    if datetime.fromisoformat(source_at.replace("Z", "+00:00")) <= datetime.fromisoformat(
-            current["source_selected_at"].replace("Z", "+00:00")):
+    new_date = datetime.fromisoformat(source_at.replace("Z", "+00:00"))
+    old_date = datetime.fromisoformat(current["source_selected_at"].replace("Z", "+00:00"))
+    if new_date < old_date or (new_date == old_date and not same_export):
         raise ValueError("Cleared update must advance the source date")
     delta = update["entries"]
     ids = publisher.questions_hashes({"version": 1, "entries": delta})
@@ -112,7 +113,8 @@ def already_applied(current, overlays, update):
 
 
 def preflight_pages(gh, work, candidate):
-    gh.release("download", "data", "--pattern", "site-data.tar.gz", "--dir", str(work))
+    if not (work / "site-data.tar.gz").exists():
+        gh.release("download", "data", "--pattern", "site-data.tar.gz", "--dir", str(work))
     assets = work / "pages"
     assets.mkdir()
     with tarfile.open(work / "site-data.tar.gz") as tar:
@@ -132,6 +134,29 @@ def preflight_pages(gh, work, candidate):
 def request_pages():
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write("published=true\n")
+
+
+def apply_update(gh, work, current, snapshot, overlays, update, baseline, same_export=False):
+    preview, overlays = staged_update(snapshot, overlays, update, digest(current.read_bytes()), baseline, work,
+                                     same_export=same_export)
+    preflight_pages(gh, work, work / "staged.json")
+    if os.environ.get("PUBLICATION_ENABLED") != "true":
+        print("Questions update staged and validated; publication is off")
+        return
+    out = work / "publish"
+    out.mkdir()
+    store = work / "locales"
+    checked = {}
+    for locale, relative in LOCALES.items():
+        path = work / relative
+        path.parent.mkdir(parents=True)
+        checked[locale] = json.dumps(overlays["data/" + relative], ensure_ascii=False).encode() + b"\n"
+        path.write_bytes(checked[locale])
+    publisher.publish_localization(gh, "data", store, out, {"site-data.tar.gz", "localization.tar.gz"},
+                                   questions=preview, require_questions=True, reviewed_questions=checked)
+    shutil.copyfile(work / "staged.json", current)
+    gh.release("upload", "data", str(current), "--clobber")
+    request_pages()
 
 
 def main():
@@ -165,25 +190,7 @@ def main():
                 request_pages()
             print("Cleared update is already in the release; no assets rewritten")
             return
-        preview, overlays = staged_update(snapshot, overlays, update, digest(current.read_bytes()), baseline, work)
-        preflight_pages(gh, work, work / "staged.json")
-        if os.environ.get("PUBLICATION_ENABLED") != "true":
-            print("Cleared update staged and validated; publication is off")
-            return
-        out = work / "publish"
-        out.mkdir()
-        store = work / "locales"
-        checked = {}
-        for locale, relative in LOCALES.items():
-            path = work / relative
-            path.parent.mkdir(parents=True)
-            checked[locale] = json.dumps(overlays["data/" + relative], ensure_ascii=False).encode() + b"\n"
-            path.write_bytes(checked[locale])
-        publisher.publish_localization(gh, "data", store, out, {"site-data.tar.gz", "localization.tar.gz"},
-                                       questions=preview, require_questions=True, reviewed_questions=checked)
-        shutil.copyfile(work / "staged.json", current)
-        gh.release("upload", "data", str(current), "--clobber")
-        request_pages()
+        apply_update(gh, work, current, snapshot, overlays, update, baseline)
 
 
 if __name__ == "__main__":

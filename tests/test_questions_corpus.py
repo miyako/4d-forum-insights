@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import sqlite3
 import sys
+import tarfile
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -16,6 +17,7 @@ from fminer import db, questions, questions_corpus as corpus
 from test_questions import answers, raw
 with patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
     import questions_prepare_public_update as public_update
+    import questions_auto_update as auto
 
 
 def response(build):
@@ -71,6 +73,66 @@ class CorpusTests(unittest.TestCase):
             self.assertEqual(row["posts_count"], 2)
             self.assertEqual(actual, expected)
             factory.assert_called_once_with("http://127.0.0.1:18080", model)
+
+    def test_automatic_update_rediscovers_new_and_edited_topics_until_processed(self):
+        baseline = "2026-01-02T00:00:00Z"
+        source = {"raw_changed_at": "2026-01-03T00:00:00Z", "last_posted_at": None,
+                  "posts_count": 2, "has_accepted_answer": False, "closed": False}
+        previous = {"active": None, "replies": 1, "accepted": False, "closed": False}
+        self.assertTrue(auto.needs_decision(None, source, baseline))
+        self.assertTrue(auto.needs_decision(previous, source, baseline))
+        previous["source_checked_at"] = source["raw_changed_at"]
+        self.assertFalse(auto.needs_decision(previous, source, baseline))
+        self.assertTrue(auto.needs_decision(previous, {**source, "posts_count": 3}, baseline))
+        self.assertTrue(auto.needs_decision(previous, {**source, "has_accepted_answer": True}, baseline))
+
+    def test_automatic_update_only_translates_exact_vetted_display(self):
+        topic = {"id": 1, "lang": "en", "title_en": None, "title": "A public title"}
+        body = "A public summary"
+        display = {"title": topic["title"], "body": body}
+        previous = {"id": 1, **display}
+        digest = auto.publisher.questions_hashes({"version": 1, "entries": [previous]})["1"]
+        cached = {"source_hash": digest, "translation_version": auto.publisher.TRANSLATION_VERSION}
+        overlays = {"data/" + path: {"entries": {"1": cached}} for path in auto.weekly.LOCALES.values()}
+        self.assertEqual(auto.display_for(topic, body, None, overlays, set()), (None, None))
+        self.assertEqual(auto.display_for(topic, body, None, overlays, {digest}), (display, None))
+        self.assertEqual(auto.display_for(topic, body, previous, overlays, set()),
+                         (display, {"fr": cached, "ja": cached}))
+        self.assertEqual(auto.display_for(topic, body + ".", previous, overlays, {digest}), (None, None))
+
+    def test_automatic_batch_reuses_translation_and_keeps_unapproved_new_topic_pending(self):
+        work = self.source.parent
+        date = "2026-01-03T00:00:00Z"
+        old = {"id": 1, "title": "Public question", "body": "Public summary",
+               "active": None, "accepted": False, "closed": False, "replies": 1}
+        snapshot = {"source_selected_at": date, "entries": [old]}
+        (work / "baseline-preview.json").write_text(json.dumps({"source_selected_at": date}))
+        (work / "questions-preview.json").write_text(json.dumps(snapshot))
+        docs = {"data/manifest.json": {"generated_at": date, "flags": {"closed": 1, "accepted": 4}},
+                "data/topics.json": {"fields": ["id", "title", "title_en", "lang", "posts", "flags"],
+                                     "rows": [[1, old["title"], None, "en", 2, 1],
+                                              [2, "New topic", None, "en", 2, 1]]},
+                "data/text.json": {"para": [old["body"], "Unapproved summary"]},
+                "data/embeddings-ids.json": [1, 2]}
+        with tarfile.open(work / "site-data.tar.gz", "w:gz") as archive:
+            for name, doc in docs.items():
+                data = json.dumps(doc).encode()
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+        digest = auto.publisher.questions_hashes({"version": 1, "entries": [old]})["1"]
+        cached = {"source_hash": digest, "translation_version": auto.publisher.TRANSLATION_VERSION}
+        overlays = {"data/" + path: {"entries": {"1": cached}} for path in auto.weekly.LOCALES.values()}
+        source_row = self.con.execute("SELECT * FROM source.topics WHERE id=1").fetchone()
+        with (patch.object(auto.prepare, "kev_answers", return_value=(source_row, answers())) as kev,
+              patch.object(auto.prepare, "translate") as translate):
+            packet = auto.build_update(self.source, snapshot, overlays, work, set(), lambda: None)
+        kev.assert_called_once_with(self.source, 1)
+        translate.assert_not_called()
+        self.assertEqual([entry["id"] for entry in packet["entries"]], [1])
+        self.assertTrue(packet["entries"][0]["closed"])
+        self.assertEqual(packet["entries"][0]["source_checked_at"], date)
+        self.assertEqual(packet["locales"]["ja"]["entries"], {"1": cached})
 
     def test_source_is_read_only_results_are_isolated_and_all_languages_are_members(self):
         report = self.prepare()

@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { buildQuestions, questionDomains, questionsEnabled, questionsPublicPreview, COVERAGE, IMPACT, COMPLEXITY, DOMAINS } from '../site/js/questions-core.js';
 import { Semantic } from '../site/js/semantic.js';
 
-const ROW_FIELDS = ['id', 'title', 'body', 'active', 'lang', 'accepted', 'closed', 'replies', 'answers', 'evidence_warnings', 'decision_model', 'decision_version'];
+const ROW_FIELDS = ['id', 'title', 'body', 'active', 'lang', 'accepted', 'closed', 'replies', 'answers', 'evidence_warnings', 'decision_model', 'decision_version', 'source_checked_at'];
 const CHOICES = { coverage: COVERAGE, impact: IMPACT, technicality: COMPLEXITY };
 const BINARY = ['has_question', 'clarification', 'version_dependent', ...Object.keys(DOMAINS).map((k) => 'domain_' + k)];
 const COMPLETE_WARNINGS = new Set([
@@ -62,6 +62,13 @@ export function validatePublicPreview(data) {
       if (complete && (!Number.isFinite(entry.answers.version_dependent?.noul)
         || entry.answers.version_dependent.noul < 0 || entry.answers.version_dependent.noul > 1)) {
         throw new Error('Invalid complete-snapshot version probability');
+      }
+      if (Object.hasOwn(entry, 'source_checked_at')
+        && (!complete || typeof entry.source_checked_at !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(entry.source_checked_at)
+          || !Number.isFinite(Date.parse(entry.source_checked_at))
+          || Date.parse(entry.source_checked_at) > Date.parse(data.source_selected_at))) {
+        throw new Error('Invalid Questions source check timestamp');
       }
       return entry;
     }),
