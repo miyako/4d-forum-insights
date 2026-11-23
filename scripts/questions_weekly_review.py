@@ -3,6 +3,7 @@
 
 import argparse
 from contextlib import closing
+from functools import partial
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -111,13 +112,17 @@ def review_fields(source, root, cfg, locale="en", limit=100, minutes=30, review=
     gate = weekly.readiness(root, cfg)
     if gate.get("automated_review_authorized") is not True:
         raise ValueError("independent hosted review is not authorized in readiness")
+    cleared_hashes = None
+    if review is reviewer.review:
+        cleared_hashes = weekly.openai_privacy.load_cleared_hashes(root)
+        review = partial(review, cleared_hashes=cleared_hashes)
     path, approvals = load_reviews(root, locale)
     english = load_reviews(root, "en")[1]["entries"]
     overlay = None
     if locale != "en":
         overlay = weekly.publisher.validate_overlay(json.loads((root / f"locales/{locale}/questions.json").read_text()))
     deadline = time.monotonic() + minutes * 60
-    attempted, held, examined = 0, 0, 0
+    attempted = held = examined = awaiting_clearance = 0
     with closing(weekly.corpus.connect(source, root / "ratings.db")) as ratings, \
             closing(weekly.display_connect(root / "display.db")) as displays:
         topics = ratings.execute("SELECT * FROM source.topics ORDER BY id").fetchall()
@@ -189,6 +194,16 @@ def review_fields(source, root, cfg, locale="en", limit=100, minutes=30, review=
                     break
                 active = [(field, expected, cache) for field, (expected, cache) in checks.items()
                           if cache["outcome"] == state and cache["attempts"] < 2]
+                if cleared_hashes is not None:
+                    allowed = []
+                    for field, expected, cache in active:
+                        if all(privacy.digest(text) in cleared_hashes for text in (original[field], output[field])):
+                            allowed.append((field, expected, cache))
+                        elif state == "pending":
+                            awaiting_clearance += 1
+                            displays.execute("UPDATE review_fields SET error=? WHERE topic_id=? AND field=? AND locale=?",
+                                             ("hosted_input_not_cleared", topic["id"], field, locale))
+                    active = allowed
                 if not active:
                     continue
                 examined += 1
@@ -252,8 +267,10 @@ def review_fields(source, root, cfg, locale="en", limit=100, minutes=30, review=
             else:
                 approvals["entries"].pop(key, None)
                 held += 1
+        displays.commit()
         write_json(path, approvals)
     print(json.dumps({"locale": locale, "review_calls_attempted": attempted, "held_topics": held,
+                      "awaiting_hosted_clearance": awaiting_clearance,
                       "publication_performed": False}))
     if held:
         raise RuntimeError("independent review incomplete or rejected; private progress retained")

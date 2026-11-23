@@ -26,7 +26,7 @@ class HostedPrivacyTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}), \
                 patch.object(hosted.httpx, "Client", return_value=client):
             result = hosted.detect(text, posts or [{"user": "AlicePrivate", "text": "PRIVATE RAW POST"}],
-                                   model, **kwargs)
+                                   model, cleared_hashes={privacy.digest(text)}, **kwargs)
         return result, requests
 
     @staticmethod
@@ -34,7 +34,7 @@ class HostedPrivacyTests(unittest.TestCase):
         return httpx.Response(200, json={"model": model, "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                               "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]})
 
-    def test_only_matching_hints_and_display_are_sent_and_spans_applied(self):
+    def test_only_cleared_display_is_sent_and_spans_applied(self):
         result = {"uncertain": False, "spans": [{"text": "AlicePrivate", "kind": "username"}]}
         (output, audit), requests = self.run_detector(
             lambda _: self.response(result),
@@ -44,10 +44,20 @@ class HostedPrivacyTests(unittest.TestCase):
         body = json.loads(requests[0].content)
         self.assertEqual(requests[0].url, hosted.ENDPOINT)
         data = json.loads(body["messages"][1]["content"])
-        self.assertEqual(data, {"text": "AlicePrivate uses ORDA.", "private_identity_hints": ["AlicePrivate"]})
+        self.assertEqual(data, {"text": "AlicePrivate uses ORDA."})
         self.assertNotIn("PRIVATE RAW POST", requests[0].content.decode())
         self.assertNotIn("HiddenOther", requests[0].content.decode())
         self.assertEqual(body["response_format"]["type"], "json_schema")
+
+    def test_missing_or_changed_clearance_stops_before_network(self):
+        text = "Consultez le manuel."
+        changed = text + " New material."
+        hashes = {privacy.digest(text)}
+        with patch.object(hosted.httpx, "Client", side_effect=AssertionError("network attempted")):
+            with self.assertRaisesRegex(privacy.ProposalError, "hosted_input_not_cleared"):
+                hosted.detect(changed, [], MODEL, cleared_hashes=hashes)
+            with self.assertRaisesRegex(privacy.ProposalError, "hosted_input_not_cleared"):
+                independent.review(text, changed, [], MODEL, locale="fr", cleared_hashes=hashes)
 
     def test_documented_luna_snapshot_uses_bounded_reasoning_and_exact_identity(self):
         proposal = {"uncertain": False, "spans": [{"text": "AlicePrivate", "kind": "username"}]}
@@ -79,14 +89,17 @@ class HostedPrivacyTests(unittest.TestCase):
         client = httpx.Client(transport=httpx.MockTransport(capture), follow_redirects=False, trust_env=False)
         with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}), \
                 patch.object(hosted.httpx, "Client", return_value=client):
-            result, audit = independent.review("AlicePrivate uses ORDA.", "[redacted] uses ORDA.",
-                                              [{"user": "AlicePrivate", "text": "PRIVATE RAW POST"}], MODEL)
+            original, proposed = "Read the manual for ORDA.", "Consultez le manuel d'ORDA."
+            result, audit = independent.review(original, proposed,
+                                              [{"user": "AlicePrivate", "text": "PRIVATE RAW POST"}], MODEL,
+                                              locale="fr", cleared_hashes={privacy.digest(original), privacy.digest(proposed)})
         self.assertFalse(result["meaning_preserved"])
         self.assertEqual(len(requests), 1)
         payload = json.loads(requests[0].content)
         self.assertNotEqual(payload["messages"][0]["content"], privacy.SYSTEM)
         data = json.loads(payload["messages"][1]["content"])
-        self.assertEqual(data["private_identity_hints"], ["AlicePrivate"])
+        self.assertEqual(data, {"original": original, "proposed": proposed, "locale": "fr"})
+        self.assertNotIn("AlicePrivate", requests[0].content.decode())
         self.assertNotIn("PRIVATE RAW POST", requests[0].content.decode())
         self.assertEqual(audit["version"], independent.VERSION)
         with patch.object(hosted.httpx, "Client", side_effect=AssertionError("network attempted")):
@@ -103,7 +116,7 @@ class HostedPrivacyTests(unittest.TestCase):
             self.run_detector(lambda _: self.response({"uncertain": False, "spans": []}, model="other"))
         with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}):
             with self.assertRaises(ValueError):
-                hosted.detect("Use ORDA.", [], "unversioned-model")
+                hosted.detect("Use ORDA.", [], "unversioned-model", cleared_hashes={privacy.digest("Use ORDA.")})
 
     def test_residual_identifiers_are_held(self):
         with self.assertRaises(privacy.DetectionFailure) as caught:

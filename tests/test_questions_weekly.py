@@ -90,6 +90,19 @@ class WeeklyTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             weekly.proposals(self.source, self.root, self.cfg, detector=detector or self.detector)
 
+    def test_uncleared_weekly_fields_stay_pending_without_hosted_calls_or_retries(self):
+        (self.root / "hosted-input-clearance.json").write_text(json.dumps({
+            "schema": "questions-hosted-input-clearance-v1",
+            "hashes": [weekly.privacy.digest("An unrelated cleared field.")],
+        }))
+        with patch.object(weekly.openai_privacy, "complete", side_effect=AssertionError("network attempted")), \
+                redirect_stdout(io.StringIO()):
+            weekly.proposals(self.source, self.root, self.cfg)
+        with closing(weekly.display_connect(self.root / "display.db")) as con:
+            rows = con.execute("SELECT outcome, attempts, error FROM display_fields").fetchall()
+            self.assertEqual([tuple(row) for row in rows], [("pending", 0, "hosted_input_not_cleared")] * 4)
+        self.assertEqual(json.loads((self.root / "delta-source.json").read_text())["privacy_pending"], [1, 2])
+
     def approve(self):
         entries = {}
         with closing(weekly.display_connect(self.root / "display.db")) as con:

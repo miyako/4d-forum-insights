@@ -14,7 +14,8 @@ import tempfile
 
 ASSET = "questions-weekly.tar.zst.enc"
 FILES = {"ratings.db", "display.db", "readiness.json", "evaluation.json", "reviews.json", "translation-reviews.json",
-         "publication-review.json", "ui-publication-review.json", "status.json", "delta-source.json"}
+         "publication-review.json", "ui-publication-review.json", "status.json", "delta-source.json",
+         "hosted-input-clearance.json"}
 PREFIXES = ("locales/", "portable-locales/", "embedding/", "publication/")
 BASELINE_FILES = {"ratings.db", "delta-source.json"}
 RUNNABLE_FILES = BASELINE_FILES | {"display.db", "readiness.json", "evaluation.json", "reviews.json"}

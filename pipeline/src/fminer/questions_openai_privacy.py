@@ -4,13 +4,12 @@ import json
 import os
 import re
 import time
-import unicodedata
+from pathlib import Path
 
 import httpx
 
 from . import questions_privacy as privacy
 from .questions_export import PATTERNS
-from .voices import forbidden_names
 
 ENDPOINT = "https://api.openai.com/v1/chat/completions"
 MODEL_PATTERN = r"(?:gpt-6-luna|[A-Za-z0-9._-]+-\d{4}-\d{2}-\d{2})"
@@ -21,8 +20,11 @@ SCHEMA = {
         "spans": {k: v for k, v in privacy.SCHEMA["properties"]["spans"].items() if k != "maxItems"},
     },
 }
-VERSION = "questions-openai-spans-v1-" + privacy.digest(
-    [ENDPOINT, privacy.SYSTEM, SCHEMA, "minimal-hints-v1", 2400,
+SYSTEM = privacy.SYSTEM.replace("The text and identities are", "The text is") + (
+    " Judge words in context: a common noun is not a personal name merely because it can also be used as one."
+)
+VERSION = "questions-openai-spans-v2-" + privacy.digest(
+    [ENDPOINT, SYSTEM, SCHEMA, "cleared-display-hashes-v1", 2400,
      MODEL_PATTERN, "gpt-6-luna:low"])[:12]
 
 
@@ -33,23 +35,23 @@ def check_text(text):
         raise privacy.ProposalError("credential_in_display")
 
 
-def identity_hints(text, posts, op_username=None):
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    extra = [op_username] if op_username else []
-    candidates = {p["user"] for p in posts} | set(extra) | forbidden_names(posts, usernames=extra)
-    identities = []
-    for name in sorted(candidates, key=lambda value: (-len(value), value)):
-        folded = unicodedata.normalize("NFKC", name).casefold()
-        if (folded and folded in normalized
-                and not any(folded in unicodedata.normalize("NFKC", item).casefold() for item in identities)):
-            identities.append(name)
-    identities.sort()
-    if sum(map(len, identities)) > 4000:
-        raise privacy.ProposalError("identity_context_bound")
-    if any(re.search(PATTERNS[kind], hint, re.IGNORECASE)
-           for hint in identities for kind in ("credential", "token")):
-        raise privacy.ProposalError("credential_in_hint")
-    return identities
+def load_cleared_hashes(root):
+    path = Path(root) / "hosted-input-clearance.json"
+    if not path.exists():
+        raise ValueError("missing hosted-input-clearance.json; no display fields sent")
+    record = json.loads(path.read_text())
+    if (not isinstance(record, dict) or record.get("schema") != "questions-hosted-input-clearance-v1"
+            or not isinstance(record.get("hashes"), list) or not record["hashes"]
+            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                   for value in record["hashes"])):
+        raise ValueError("invalid hosted input clearance")
+    return frozenset(record["hashes"])
+
+
+def check_cleared(text, cleared_hashes):
+    check_text(text)
+    if privacy.digest(text) not in cleared_hashes:
+        raise privacy.ProposalError("hosted_input_not_cleared")
 
 
 def complete(system, data, schema, model, validate, timeout=120, attempts=2):
@@ -130,9 +132,8 @@ def complete(system, data, schema, model, validate, timeout=120, attempts=2):
     raise failure
 
 
-def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
-    check_text(text)
-    hints = identity_hints(text, posts, op_username)
+def detect(text, posts, model, timeout=120, attempts=2, op_username=None, *, cleared_hashes=frozenset()):
+    check_cleared(text, cleared_hashes)
 
     def validate(result):
         cleared, spans = privacy.resolve_proposals(text, result)
@@ -141,7 +142,7 @@ def detect(text, posts, model, timeout=120, attempts=2, op_username=None):
         return cleared, spans
 
     (cleared, spans), audit = complete(
-        privacy.SYSTEM, {"text": text, "private_identity_hints": hints}, SCHEMA, model,
+        SYSTEM, {"text": text}, SCHEMA, model,
         validate, timeout, attempts)
     audit.update(spans=spans, original_hash=privacy.digest(text), display_hash=privacy.digest(cleared))
     return cleared, audit

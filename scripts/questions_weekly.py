@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 from contextlib import closing
 from datetime import datetime
+from functools import partial
 import hashlib
 import json
 import os
@@ -136,12 +137,16 @@ def proposals(source, root, cfg, limit=100, minutes=30, detector=openai_privacy.
         raise ValueError("positive execution bounds required")
     root = Path(root)
     readiness(root, cfg)
+    cleared_hashes = None
+    if detector is openai_privacy.detect:
+        cleared_hashes = openai_privacy.load_cleared_hashes(root)
+        detector = partial(detector, cleared_hashes=cleared_hashes)
     delta_path = root / "delta-source.json"
     delta = json.loads(delta_path.read_text())
     pending = set(delta.get("privacy_pending", []))
     if any(type(topic_id) is not int or topic_id <= 0 for topic_id in pending):
         raise ValueError("invalid private redaction delta queue")
-    errors = done = held = held_fields = 0
+    errors = done = held = held_fields = awaiting_clearance = 0
     deadline = time.monotonic() + minutes * 60
     with closing(corpus.connect(source, root / "ratings.db")) as ratings, \
             closing(display_connect(root / "display.db")) as displays:
@@ -193,6 +198,12 @@ def proposals(source, root, cfg, limit=100, minutes=30, detector=openai_privacy.
                 row = displays.execute("SELECT * FROM display_fields WHERE topic_id=? AND field=?",
                                        (topic["id"], field)).fetchone()
                 if row["outcome"] != state or (state == "held" and row["attempts"] >= 2):
+                    continue
+                if cleared_hashes is not None and isinstance(text, str) and privacy.digest(text) not in cleared_hashes:
+                    if state == "pending":
+                        awaiting_clearance += 1
+                        displays.execute("UPDATE display_fields SET error=? WHERE topic_id=? AND field=?",
+                                         ("hosted_input_not_cleared", topic["id"], field))
                     continue
                 if time.monotonic() >= deadline or (topic["id"] not in attempted_topics and len(attempted_topics) >= limit):
                     continue
@@ -269,12 +280,13 @@ def proposals(source, root, cfg, limit=100, minutes=30, detector=openai_privacy.
                 raise ValueError("invalid private field cache") from None
             displays.commit()
             pending.discard(topic["id"])
+        displays.commit()
         delta["privacy_pending"] = sorted(pending)
         tmp = delta_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(delta, sort_keys=True))
         tmp.replace(delta_path)
     print(json.dumps({"proposed_fields": done, "held_topics": held, "held_fields": held_fields,
-                      "errors": errors, "publication_allowed": False}))
+                      "awaiting_hosted_clearance": awaiting_clearance, "errors": errors, "publication_allowed": False}))
     if errors or held_fields:
         raise RuntimeError("Questions proposals held after validation failures; inspect encrypted checkpoint")
 

@@ -77,7 +77,7 @@ jobs:
         if: always()
         run: |
           echo '### Weekly Questions' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Local Kev and enrichment; OpenAI redaction and separate independent review receive minimized display text and matching identity hints. Only reviewed English enters translation; FR/JA receive independent meaning/privacy checks. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Local Kev and enrichment; OpenAI redaction and separate review receive only exact cleared display strings, never source identity hints. Only reviewed English enters translation. Unresolved rows and incomplete FR/JA block publication. Private data/logs are never uploaded as Actions artifacts.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Check failing step for readiness, model, checkpoint or publication-review blockers; no deployment occurs on a failed gate.' >> "$GITHUB_STEP_SUMMARY"
 
   pages:

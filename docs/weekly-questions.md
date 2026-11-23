@@ -33,9 +33,8 @@ no-op updates.
    membership, then classify at most 100 pending records within 45 minutes.
    The frozen final decisions are a required durable seed, not reconstructed
    from public arrays or re-rated for a test.
-4. OpenAI receives one generated English title/body field and only source identity
-   hints whose normalized text matches that field. This may transmit identifiers
-   that redaction has not yet caught. It never receives source posts, the forum
+4. OpenAI receives one previously cleared English title/body field for a second pass.
+   Source identity hints stay local. It never receives source posts, the forum
    database, classifier decisions, private audits or keys as input content (the
    API key is used only for authentication). Known credential/token
    patterns are held locally before a request; pattern checks cannot guarantee
@@ -59,8 +58,8 @@ no-op updates.
    prompt/rule freshness. `questions_weekly_review.py english` makes a separate
    OpenAI request for each unreviewed title/body, comparing original English
    against the deterministically redacted proposal. It does not reuse the
-   redactor's judgment or send raw forum posts. Only matching source identity
-   hints accompany the bounded display pair. Explicit privacy, meaning and
+   redactor's judgment or send raw forum posts. Each string in the display pair,
+   including translated strings, must be cleared before the request. Explicit privacy, meaning and
    uncertainty booleans must pass, with exact response-model and proof hashes.
    Rejects remain held; transport/schema failures have at most two durable
    attempts. Successful field proofs are independently cached in `display.db`.
@@ -151,8 +150,8 @@ locale per run. Each field has at most two durable attempts with at most two
 HTTP calls per attempt: at most 2,400 review calls plus 800 redaction calls,
 before the separate translation budget. Each request is limited to 2,400
 completion tokens, 120 seconds and a 32,000-character serialized input.
-Each display string is limited to 12,000 characters; hints are limited to
-4,000. English review has a 30-minute budget, as does each target locale.
+Each display string is limited to 12,000 characters. English review has a
+30-minute budget, as does each target locale.
 These are upper bounds, not expected usage or a spend guarantee. The job's
 overall deadline can interrupt individual stage budgets; encrypted partial
 progress is retained where the exit handler can run.
@@ -180,6 +179,7 @@ evaluation.json
 reviews.json
 translation-reviews.json     # independent FR/JA field review bindings
 delta-source.json            # reviewed initial raw hashes + pending enrichment/redaction IDs
+hosted-input-clearance.json  # exact display-string hashes cleared for hosted processing
 locales/fr/questions.json    # existing overlay contract
 locales/ja/questions.json
 locales/text-cache/          # existing canonical string caches/provenance
@@ -205,6 +205,13 @@ To preserve the initial baseline locally before it qualifies for CI, supply
 This requires the frozen ratings and delta baseline, verifies a local restore,
 and neither uploads the archive nor treats missing review records as approvals.
 The release `push` and workflow readiness checks are unchanged.
+
+The hosted input file uses `{"schema":"questions-hosted-input-clearance-v1","hashes":[...]}`,
+where each entry is `questions_privacy.digest(text)` from an already cleared
+display string. Do not generate it by hashing unreviewed input: a hash binds the
+clearance to the exact string; it does not establish clearance. Missing or
+changed fields cannot be sent. The published snapshot's clearance does not
+cover new forum content.
 
 For local inference, first create a new independent **durable** SQLite backup
 outside the disposable checkout with
