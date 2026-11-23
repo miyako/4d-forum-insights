@@ -199,7 +199,7 @@ jobs:
     needs: delta
     if: ${{ !cancelled() && (inputs.questions_preview == true || (needs.delta.outputs.published == 'true' && vars.QUESTIONS_WEEKLY_ENABLED == 'true' && inputs.skip_models != true)) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     permissions:
       contents: write
     env:
@@ -214,6 +214,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
+      - uses: actions/cache@v6
+        with:
+          path: build/questions-models/decision.gguf
+          key: questions-kev-${{ hashFiles('config/questions-weekly.json') }}
       - name: Stage or publish the bounded Questions delta
         run: |
           umask 077

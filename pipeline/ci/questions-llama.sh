@@ -12,22 +12,42 @@ install_questions_llama() {
     export LD_LIBRARY_PATH="$PWD/build/questions-models/llama:${LD_LIBRARY_PATH:-}"
 }
 
+download_questions_model() {
+    local model=$1 url=$2 sha=$3 partial attempt
+    partial="$model.part"
+    if [ ! -f "$model" ]; then
+        for attempt in 1 2 3; do
+            if curl --http1.1 -fsSL --continue-at - --connect-timeout 30 --max-time 1200 \
+                "$url" -o "$partial"; then
+                break
+            fi
+            if [ "$attempt" = 3 ]; then
+                echo "::error::Questions model download failed after three attempts"
+                return 1
+            fi
+            echo "::warning::Questions model download interrupted; resuming"
+        done
+        printf '%s  %s\n' "$sha" "$partial" | sha256sum -c - || return 1
+        mv "$partial" "$model"
+    fi
+    printf '%s  %s\n' "$sha" "$model" | sha256sum -c -
+}
+
 start_server() {
     local role=$1 port=$2
-    local repo rev file sha alias
+    local repo rev file sha alias model
     repo=$(jq -r ".${role}_repo" "$CFG")
     rev=$(jq -r ".${role}_hf_revision" "$CFG")
     file=$(jq -r ".${role}_file" "$CFG")
     sha=$(jq -r ".${role}_sha256" "$CFG")
     alias=$(jq -r ".${role}_model" "$CFG")
+    model="build/questions-models/$role.gguf"
     if curl -fsS --max-time 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
         echo "::error::Questions model port already occupied"; exit 1
     fi
-    timeout 15m curl -fsSL --retry 2 --connect-timeout 30 --max-time 600 \
-        "https://huggingface.co/$repo/resolve/$rev/$file" -o "build/questions-models/$role.gguf"
-    printf '%s  %s\n' "$sha" "build/questions-models/$role.gguf" | sha256sum -c -
+    download_questions_model "$model" "https://huggingface.co/$repo/resolve/$rev/$file" "$sha" || return 1
     env -u OPENAI_API_KEY -u DB_KEY -u GH_TOKEN "$SERVER" \
-        -m "build/questions-models/$role.gguf" --alias "$alias" \
+        -m "$model" --alias "$alias" \
         --host 127.0.0.1 --port "$port" -c 16384 -np 1 -t 4 -fa on --jinja \
         --cache-ram 0 --offline --no-webui --log-disable > "build/questions-models/$role.log" 2>&1 &
     PID=$!
