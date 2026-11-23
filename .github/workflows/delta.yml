@@ -207,7 +207,6 @@ jobs:
       DB_KEY: ${{ secrets.DB_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      QUESTIONS_AUTO_DISPLAY_HASHES: ${{ vars.QUESTIONS_AUTO_DISPLAY_HASHES }}
       PUBLICATION_ENABLED: ${{ inputs.questions_preview != true && github.ref_name == github.event.repository.default_branch && vars.QUESTIONS_WEEKLY_PUBLICATION_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v7

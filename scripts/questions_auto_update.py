@@ -16,7 +16,9 @@ import publish_data as publisher
 import questions_prepare_public_update as prepare
 import questions_public_weekly as weekly
 from fminer import questions, questions_corpus
+from fminer.questions_export import PATTERNS
 from fminer.questions_openai_privacy import check_text
+from fminer.questions_privacy import ProposalError
 
 LIMIT = 3
 
@@ -37,13 +39,18 @@ def needs_decision(previous, source, baseline_date):
             or timestamp(source["last_posted_at"]) > timestamp(previous.get("active")))
 
 
-def display_for(topic, paragraph, previous, overlays, approved):
+def display_for(topic, paragraph, previous, overlays):
     if not paragraph or (topic["lang"] != "en" and not topic["title_en"]):
         return None, None
     display = {"title": topic["title_en"] or topic["title"], "body": paragraph}
     if any(not text.strip() or len(text) > limit
            for text, limit in zip(display.values(), (200, 1200))):
         return None, None
+    for field, text in display.items():
+        check_text(text)
+        for kind in ("code", "html", "link", "email", "mention", "path", "ip"):
+            text = re.sub(PATTERNS[kind], "[redacted]", text, flags=re.IGNORECASE)
+        display[field] = text
     key = str(topic["id"])
     digest = publisher.questions_hashes({"version": 1, "entries": [{"id": topic["id"], **display}]})[key]
     if previous is not None and all(previous[field] == text for field, text in display.items()):
@@ -51,14 +58,10 @@ def display_for(topic, paragraph, previous, overlays, approved):
         if all(entry and entry["source_hash"] == digest
                and entry["translation_version"] == publisher.TRANSLATION_VERSION for entry in cached.values()):
             return display, cached
-    if digest in approved:
-        for text in display.values():
-            check_text(text)
-        return display, None
-    return None, None
+    return display, None
 
 
-def build_update(source, snapshot, overlays, work, approved, start_kev, limit=LIMIT):
+def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT):
     with tarfile.open(work / "site-data.tar.gz") as archive:
         manifest = json.load(archive.extractfile("data/manifest.json"))
         topics = json.load(archive.extractfile("data/topics.json"))
@@ -78,7 +81,8 @@ def build_update(source, snapshot, overlays, work, approved, start_kev, limit=LI
     attempted = 0
     locales = {locale: {"version": 1, "locale": locale, "page": "questions", "entries": {}}
                for locale in weekly.LOCALES}
-    pending = {"index or source": 0, "English display clearance": 0, "batch limit": 0}
+    pending = {"index or source": 0, "missing or invalid English display": 0, "credential pattern": 0,
+               "batch limit": 0}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
         rows = con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
@@ -99,9 +103,15 @@ def build_update(source, snapshot, overlays, work, approved, start_kev, limit=LI
                     or bool(row["has_accepted_answer"]) != bool(topic["flags"] & manifest["flags"]["accepted"])):
                 pending["index or source"] += 1
                 continue
-            display, cached = display_for(topic, paragraph, old, overlays, approved)
+            try:
+                display, cached = display_for(topic, paragraph, old, overlays)
+            except ProposalError as error:
+                if error.reason != "credential_in_display":
+                    raise
+                pending["credential pattern"] += 1
+                continue
             if display is None:
-                pending["English display clearance"] += 1
+                pending["missing or invalid English display"] += 1
                 continue
             if attempted == limit:
                 pending["batch limit"] += 1
@@ -134,9 +144,6 @@ def build_update(source, snapshot, overlays, work, approved, start_kev, limit=LI
 def main():
     if os.environ.get("DATA_PUBLICATION_CHILD") != "1":
         raise ValueError("Automatic Questions updates require the shared release lease")
-    approved = set(os.environ.get("QUESTIONS_AUTO_DISPLAY_HASHES", "").split())
-    if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in approved):
-        raise ValueError("Invalid approved Questions display digest")
     gh = publisher.GitHub(os.environ["GITHUB_REPOSITORY"])
     with tempfile.TemporaryDirectory(prefix="questions-auto-") as directory:
         work = Path(directory)
@@ -167,7 +174,7 @@ read -r shutdown || true
                 raise RuntimeError("Kev launcher did not become ready")
 
         try:
-            update = build_update(source, snapshot, overlays, work, approved, start)
+            update = build_update(source, snapshot, overlays, work, start)
         finally:
             if process is not None:
                 process.stdin.close()

@@ -86,7 +86,7 @@ class CorpusTests(unittest.TestCase):
         self.assertTrue(auto.needs_decision(previous, {**source, "posts_count": 3}, baseline))
         self.assertTrue(auto.needs_decision(previous, {**source, "has_accepted_answer": True}, baseline))
 
-    def test_automatic_update_only_translates_exact_vetted_display(self):
+    def test_automatic_update_uses_public_display_without_manual_approval(self):
         topic = {"id": 1, "lang": "en", "title_en": None, "title": "A public title"}
         body = "A public summary"
         display = {"title": topic["title"], "body": body}
@@ -94,13 +94,17 @@ class CorpusTests(unittest.TestCase):
         digest = auto.publisher.questions_hashes({"version": 1, "entries": [previous]})["1"]
         cached = {"source_hash": digest, "translation_version": auto.publisher.TRANSLATION_VERSION}
         overlays = {"data/" + path: {"entries": {"1": cached}} for path in auto.weekly.LOCALES.values()}
-        self.assertEqual(auto.display_for(topic, body, None, overlays, set()), (None, None))
-        self.assertEqual(auto.display_for(topic, body, None, overlays, {digest}), (display, None))
-        self.assertEqual(auto.display_for(topic, body, previous, overlays, set()),
+        self.assertEqual(auto.display_for(topic, body, None, overlays), (display, None))
+        self.assertEqual(auto.display_for(topic, body, previous, overlays),
                          (display, {"fr": cached, "ja": cached}))
-        self.assertEqual(auto.display_for(topic, body + ".", previous, overlays, {digest}), (None, None))
+        self.assertEqual(auto.display_for(topic, body + ".", previous, overlays),
+                         ({**display, "body": body + "."}, None))
+        self.assertEqual(auto.display_for(topic, "Consultez le manuel ou écrivez à example@example.com.", None, overlays),
+                         ({**display, "body": "Consultez le manuel ou écrivez à [redacted]."}, None))
+        with self.assertRaisesRegex(auto.ProposalError, "credential_in_display"):
+            auto.display_for(topic, "password = example-value", None, overlays)
 
-    def test_automatic_batch_reuses_translation_and_keeps_unapproved_new_topic_pending(self):
+    def test_automatic_batch_reuses_translation_and_translates_new_public_topic(self):
         work = self.source.parent
         date = "2026-01-03T00:00:00Z"
         old = {"id": 1, "title": "Public question", "body": "Public summary",
@@ -112,7 +116,7 @@ class CorpusTests(unittest.TestCase):
                 "data/topics.json": {"fields": ["id", "title", "title_en", "lang", "posts", "flags"],
                                      "rows": [[1, old["title"], None, "en", 2, 1],
                                               [2, "New topic", None, "en", 2, 1]]},
-                "data/text.json": {"para": [old["body"], "Unapproved summary"]},
+                "data/text.json": {"para": [old["body"], "New public summary"]},
                 "data/embeddings-ids.json": [1, 2]}
         with tarfile.open(work / "site-data.tar.gz", "w:gz") as archive:
             for name, doc in docs.items():
@@ -124,15 +128,19 @@ class CorpusTests(unittest.TestCase):
         cached = {"source_hash": digest, "translation_version": auto.publisher.TRANSLATION_VERSION}
         overlays = {"data/" + path: {"entries": {"1": cached}} for path in auto.weekly.LOCALES.values()}
         source_row = self.con.execute("SELECT * FROM source.topics WHERE id=1").fetchone()
+        translated = {"fields": {"title": "Translated title", "body": "Translated summary"}}
         with (patch.object(auto.prepare, "kev_answers", return_value=(source_row, answers())) as kev,
-              patch.object(auto.prepare, "translate") as translate):
-            packet = auto.build_update(self.source, snapshot, overlays, work, set(), lambda: None)
-        kev.assert_called_once_with(self.source, 1)
-        translate.assert_not_called()
-        self.assertEqual([entry["id"] for entry in packet["entries"]], [1])
-        self.assertTrue(packet["entries"][0]["closed"])
-        self.assertEqual(packet["entries"][0]["source_checked_at"], date)
-        self.assertEqual(packet["locales"]["ja"]["entries"], {"1": cached})
+              patch.object(auto.prepare, "translate", return_value={
+                  locale: {"entries": {"2": translated}} for locale in auto.weekly.LOCALES
+              }) as translate,
+              patch.dict(auto.os.environ, {"OPENAI_MODEL": "test-model"})):
+            packet = auto.build_update(self.source, snapshot, overlays, work, lambda: None)
+        self.assertEqual([call.args[1] for call in kev.call_args_list], [2, 1])
+        translate.assert_called_once_with(packet["entries"][0], "test-model")
+        self.assertEqual([entry["id"] for entry in packet["entries"]], [2, 1])
+        self.assertTrue(packet["entries"][1]["closed"])
+        self.assertEqual(packet["entries"][1]["source_checked_at"], date)
+        self.assertEqual(packet["locales"]["ja"]["entries"], {"1": cached, "2": translated})
 
     def test_source_is_read_only_results_are_isolated_and_all_languages_are_members(self):
         report = self.prepare()

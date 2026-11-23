@@ -31,10 +31,10 @@ and forum status from the current encrypted forum checkpoint. It considers up
 to three ready topics per run and runs Kev on their opening and replies. It uses
 English title and paragraph from the current public forum export. If both match
 an existing Questions entry exactly, it reuses the source-bound translations.
-For other text, `QUESTIONS_AUTO_DISPLAY_HASHES` supplies whitespace-separated
-SHA-256 digests of vetted English title/body pairs (using `questions_hashes`
-from `scripts/publish_data.py`). Only those exact pairs go to OpenAI; other
-topics remain pending while ready topics can proceed. No manual update packet
+Otherwise, OpenAI translates the title and summary from the public export
+without per-thread approval. The job strips recognizable contact details,
+links, local paths and fenced code, and holds entries with apparent credentials.
+Raw posts and participant metadata stay on the runner. No manual update packet
 or manually written summary is required by the scheduled job. Use
 `questions_preview: true` on `delta.yml` to stage against the current releases
 without writing public assets. Enable scheduled processing with
