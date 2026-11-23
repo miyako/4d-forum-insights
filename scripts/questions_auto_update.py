@@ -83,13 +83,15 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, previ
     attempted = 0
     locales = {locale: {"version": 1, "locale": locale, "page": "questions", "entries": {}}
                for locale in weekly.LOCALES}
-    pending = {"index or source": 0, "missing or invalid English display": 0, "credential pattern": 0,
+    pending = {"index or source": 0, "missing or invalid English display": 0, "stale summary": 0,
+               "credential pattern": 0,
                "Kev timeout": 0, "OpenAI failure": 0, "sensitive display": 0, "source code": 0,
                "batch limit": 0}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         con.row_factory = sqlite3.Row
         rows = list(con.execute("""SELECT id,raw_changed_at,last_posted_at,posts_count,
-                                          has_accepted_answer,closed,fetch_error
+                                          has_accepted_answer,closed,fetch_error,
+                                          enriched_at,enrich_error,summary_paragraph
                                    FROM topics ORDER BY id DESC"""))
         candidates = []
         for row in rows:
@@ -108,6 +110,11 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, previ
                     or bool(row["closed"]) != bool(topic["flags"] & manifest["flags"]["closed"])
                     or bool(row["has_accepted_answer"]) != bool(topic["flags"] & manifest["flags"]["accepted"])):
                 pending["index or source"] += 1
+                continue
+            if (not row["enriched_at"] or row["enrich_error"]
+                    or timestamp(row["enriched_at"]) < timestamp(row["raw_changed_at"])
+                    or row["summary_paragraph"] != paragraph):
+                pending["stale summary"] += 1
                 continue
             try:
                 display, cached = display_for(topic, paragraph, old, overlays)

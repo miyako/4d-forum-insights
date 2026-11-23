@@ -27,10 +27,10 @@ class AutomaticTimeoutTests(unittest.TestCase):
             db.execute("""CREATE TABLE topics (
                 id INTEGER, raw_changed_at TEXT, last_posted_at TEXT,
                 posts_count INTEGER, has_accepted_answer INTEGER, closed INTEGER, fetch_error TEXT,
-                thread_raw TEXT
+                thread_raw TEXT, enriched_at TEXT, enrich_error TEXT, summary_paragraph TEXT
             )""")
-            db.executemany("INSERT INTO topics VALUES (?, ?, NULL, 2, 0, 0, NULL, 'thread')",
-                           [(n, self.date) for n in (1, 2, 3)])
+            db.executemany("INSERT INTO topics VALUES (?, ?, NULL, 2, 0, 0, NULL, 'thread', ?, NULL, 'Public summary')",
+                           [(n, self.date, self.date) for n in (1, 2, 3)])
         self.snapshot = {"source_selected_at": self.date, "entries": []}
         (self.work / "baseline-preview.json").write_text(json.dumps(self.snapshot))
         (self.work / "questions-preview.json").write_text(json.dumps(self.snapshot))
@@ -137,8 +137,8 @@ class AutomaticTimeoutTests(unittest.TestCase):
     def test_batch_moves_past_timed_out_topics_on_later_week(self):
         attempted = []
         with sqlite3.connect(self.source) as db:
-            db.executemany("INSERT INTO topics VALUES (?, ?, NULL, 2, 0, 0, NULL, 'thread')",
-                           [(n, self.date) for n in (4, 5, 6)])
+            db.executemany("INSERT INTO topics VALUES (?, ?, NULL, 2, 0, 0, NULL, 'thread', ?, NULL, 'Public summary')",
+                           [(n, self.date, self.date) for n in (4, 5, 6)])
         with tarfile.open(self.work / "site-data.tar.gz", "w:gz") as archive:
             docs = {
                 "data/manifest.json": {"generated_at": self.date, "flags": {"closed": 1, "accepted": 4}},
@@ -172,6 +172,15 @@ class AutomaticTimeoutTests(unittest.TestCase):
                         member.size = len(data)
                         archive.addfile(member, io.BytesIO(data))
         self.assertEqual(len(set(attempted)), 6)
+
+    def test_stale_summary_is_not_used_for_enrichment(self):
+        with sqlite3.connect(self.source) as db:
+            db.execute("UPDATE topics SET enriched_at='2025-01-01T00:00:00Z' WHERE id=2")
+        with (patch.object(auto.prepare, "kev_answers", side_effect=auto.prepare.DecisionTimeout("timeout")) as kev,
+              redirect_stdout(io.StringIO())):
+            with self.assertRaises(RuntimeError):
+                auto.build_update(self.source, self.snapshot, {}, self.work, lambda: None)
+        self.assertNotIn(2, [call.args[1] for call in kev.call_args_list])
 
 
 if __name__ == "__main__":
