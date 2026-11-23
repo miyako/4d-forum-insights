@@ -173,8 +173,8 @@ def build_update(source, snapshot, overlays, work, start_kev, limit=LIMIT, previ
             entries.append(entry)
     print(f"Questions: {len(entries)} prepared; pending by reason: {json.dumps(pending, sort_keys=True)}")
     if not entries:
-        if pending["Kev timeout"] or pending["OpenAI failure"]:
-            raise RuntimeError("Kev or OpenAI failed; no Questions updates were prepared")
+        if attempted:
+            raise RuntimeError("Processing attempted topics failed; no Questions updates were prepared")
         return None
     return {"schema": "questions-cleared-update-v1",
             "base_sha256": weekly.digest((work / "questions-preview.json").read_bytes()),

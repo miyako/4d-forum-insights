@@ -91,6 +91,15 @@ class AutomaticTimeoutTests(unittest.TestCase):
         self.assertEqual([entry["id"] for entry in update["entries"]], [3])
         self.assertIn('"OpenAI failure": 2', output.getvalue())
 
+    def test_all_held_topics_do_not_report_success(self):
+        with (patch.object(auto.prepare, "kev_answers", return_value=({}, {})),
+              patch.object(auto.prepare, "enrich_display",
+                           side_effect=auto.ProposalError("source_code_in_display")),
+              patch.dict(os.environ, {"OPENAI_MODEL": "test-model"}),
+              redirect_stdout(io.StringIO())):
+            with self.assertRaisesRegex(RuntimeError, "no Questions updates were prepared"):
+                auto.build_update(self.source, self.snapshot, {}, self.work, lambda: None)
+
     def test_preview_binding_rejects_changed_display_before_start(self):
         started = []
         with self.assertRaisesRegex(ValueError, "display changed"):
