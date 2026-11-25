@@ -120,8 +120,7 @@ function update({ history = true, replace = false, keepPage = false } = {}) {
       + Object.entries(choices).map(([value, name]) => {
         const count = base.filter((it) => key === 'domain' ? it.domains.includes(value) : it[key].choice === value).length;
         const selected = s[key].includes(value);
-        const tone = RATING_TONES[key]?.[value];
-        return `<button type="button" class="area${selected ? ' active' : ''}${tone ? ' rating-tone tone-' + tone : ''}" data-facet="${key}" data-value="${value}" aria-pressed="${selected}">${key === 'coverage' ? coverageIcon(value) : ''}${esc(tr(name))} <span class="n">${num.format(count)}</span></button>`;
+        return `<button type="button" class="area${selected ? ' active' : ''}" data-facet="${key}" data-value="${value}" aria-pressed="${selected}">${key === 'coverage' ? coverageIcon(value) : ''}${esc(tr(name))} <span class="n">${num.format(count)}</span></button>`;
       }).join('') + '</div></fieldset>';
   }).join('');
   $('#results').innerHTML = results.length ? results.slice(0, app.shown).map(card).join('') : `<p class="empty">${esc(tr('No questions match. Try removing a filter.'))}</p>`;
