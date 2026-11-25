@@ -8,7 +8,7 @@ export const COVERAGE_FILL = { none: 0, mostly_unanswered: 25, partial: 50, most
 export function coverageIcon(key) {
   const fill = COVERAGE_FILL[key];
   if (fill === undefined) throw new Error(`Unknown answer coverage: ${key}`);
-  return `<i class="coverage-icon" style="--coverage-fill:${fill}%" aria-hidden="true"></i>`;
+  return `<i class="coverage-icon coverage-icon-${key}" style="--coverage-fill:${fill}%" aria-hidden="true"></i>`;
 }
 export const RATING_TONES = {
   impact: { critical: 'high', significant: 'medium', minor: 'low', unknown: 'unknown' },

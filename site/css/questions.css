@@ -8,6 +8,8 @@
   display: inline-block; width: 18px; height: 18px; flex: none; border-radius: 50%; border: 1px solid currentColor;
   background: conic-gradient(currentColor 0 var(--coverage-fill), transparent var(--coverage-fill) 100%);
 }
+.coverage-icon-full { color: var(--ok); }
+.coverage-icon-none { color: var(--lv2t); }
 .question-ratings .rating-tone { display: inline-flex; align-items: center; gap: 6px; }
 .questions-page .rating-tone.tone-high { background: var(--lv4); color: var(--lv4t); }
 .questions-page .rating-tone.tone-medium { background: var(--lv2); color: var(--lv2t); }
